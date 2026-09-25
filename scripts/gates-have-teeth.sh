@@ -121,6 +121,12 @@ fault "one-way-out: a net.Dial planted in internal/service" \
 var _ = net.Dial' \
   fail ./scripts/one-way-out.sh
 
+fault "one-way-out: an http.Client{} planted in examples/calibration, exempted, must not fire" \
+  examples/calibration/main.go 'func main() {' 'var leakedInExample = http.Client{}
+
+func main() {' \
+  pass ./scripts/one-way-out.sh
+
 echo "-- one-way-out: every .go file removed --"
 find . -name '*.go' -not -path './.git/*' -exec mv {} {}.gate-teeth-hidden \;
 if ./scripts/one-way-out.sh >/dev/null 2>&1; then got=pass; else got=fail; fi

@@ -77,6 +77,23 @@
           "why": "an optional value needs its unset behaviour on record somewhere a launcher can read it, same reasoning vouchryx gives for VOUCHRYX_REVOKE_KEYS"
         }
       }
+    },
+    {
+      "name": "calibration-example",
+      "class": "example",
+      "checked": {
+        "package": "github.com/TAIPANBOX/typryx/examples/calibration"
+      },
+      "declared": {
+        "role": {
+          "value": "a plain HTTP client of typryx's own /v1/ask and /v1/outcome, not a service: generates a deterministic set of arithmetic eval.outcome_met items and produces the measurement phase E's calibration command reads",
+          "why": "internal/manifest.TestEveryBinaryThisRepositoryBuildsIsDeclaredAndTheReverse requires every package main this repository builds to be declared here; this entry exists to satisfy that, not because this is a service with env vars or a listen address of its own"
+        },
+        "not_a_backend": {
+          "value": "reaches the network as a caller of typryx's HTTP API, the same shape as the curl examples in README.md; it is exempted from scripts/one-way-out.sh for exactly that reason (see that script's own comment)",
+          "why": "a reader of that gate's exemption list should be able to find why here rather than only in the script"
+        }
+      }
     }
   ]
 }
