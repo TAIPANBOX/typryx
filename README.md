@@ -13,7 +13,7 @@ and recorded.
 ![Go 1.27](https://img.shields.io/badge/Go-1.27-4493f8)
 ![one direct dependency](https://img.shields.io/badge/direct%20dependency-one-2dd4bf)
 ![license Apache 2.0](https://img.shields.io/badge/license-Apache--2.0-9aa7b8)
-![tests](https://img.shields.io/badge/tests-500-brightgreen)
+![tests](https://img.shields.io/badge/tests-501-brightgreen)
 
 </div>
 
@@ -358,7 +358,7 @@ go build ./...
 ./scripts/gates-have-teeth.sh
 ```
 
-232 tests. `go test ./... -race` covers every package; `internal/manifest` builds and
+233 tests. `go test ./... -race` covers every package; `internal/manifest` builds and
 starts the real binary to prove `components.json` against what it actually does; CI's
 `image` job builds the Dockerfile on every push and pull request, pushing nowhere.
 

@@ -693,3 +693,12 @@ func TestTheLogprobsOllamaActuallyReturnedAreAccepted(t *testing.T) {
 		t.Fatalf("billing should carry almost all the mass, got %v", ans.Probabilities)
 	}
 }
+
+func TestTheLetterTableHasOneLabelPerAllowedOption(t *testing.T) {
+	if len(letters) != maxLetterLabels {
+		t.Fatalf("letters has %d labels, maxLetterLabels is %d", len(letters), maxLetterLabels)
+	}
+	if letterFor(0) != "A" || letterFor(maxLetterLabels-1) != "Z" {
+		t.Fatalf("labels run A..Z, got %q..%q", letterFor(0), letterFor(maxLetterLabels-1))
+	}
+}

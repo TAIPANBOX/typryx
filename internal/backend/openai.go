@@ -248,7 +248,12 @@ func labelsFor(q Question) ([]label, error) {
 	}
 }
 
-func letterFor(i int) string { return string(rune('A' + i)) }
+// letters holds the single-token labels. Indexing it rather than converting
+// an int to a rune keeps the bound in one place: callers never pass more
+// than maxLetterLabels, and an index past it panics instead of wrapping.
+const letters = "ABCDEFGHIJKLMNOPQRSTUVWXYZ"
+
+func letterFor(i int) string { return letters[i : i+1] }
 
 // buildPrompt assembles the system and user messages. The system message is
 // fixed and names the state as data, never instructions. The user message

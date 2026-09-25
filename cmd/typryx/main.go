@@ -152,7 +152,7 @@ func loadOpenAIConfig() (*openaiBackendConfig, error) {
 
 	var key string
 	if keyFile := os.Getenv("TYPRYX_OPENAI_KEY_FILE"); keyFile != "" {
-		b, err := os.ReadFile(keyFile) // #nosec G304 -- an operator-provided path, read once at startup
+		b, err := os.ReadFile(keyFile) // #nosec G304 G703 -- an operator-provided path from TYPRYX_OPENAI_KEY_FILE, read once at startup, never from a request
 		if err != nil {
 			return nil, &configError{msg: fmt.Sprintf(
 				"TYPRYX_OPENAI_KEY_FILE=%s could not be read: %v", keyFile, err)}

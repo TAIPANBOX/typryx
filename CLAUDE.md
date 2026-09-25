@@ -50,7 +50,12 @@ go build ./...
 ./scripts/one-way-out.sh
 ./scripts/no-secrets.sh
 ./scripts/gates-have-teeth.sh   # needs a clean tree, run it after committing
+gosec -quiet ./...              # v2.29.0, as CI; silent when clean
+govulncheck ./...               # v1.7.0, as CI
 ```
+
+The last two ran only in CI until 2026-09-25, when phase C reached `main` with two gosec
+findings (G115, G703) that every local gate had passed. Run them before pushing.
 
 ## Hard invariants
 
