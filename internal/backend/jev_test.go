@@ -799,3 +799,25 @@ func randHostileValue(r *rand.Rand) any {
 		return true
 	}
 }
+
+// A noul answer with no `noul` field, or with `noul: null`, is an answer
+// with no probability in it. Decoding into a plain float64 turned that
+// absence into 0, and 0 became {"true": 0, "false": 1}: a certain "no"
+// that the server never said. Found by the session model's review of the
+// phase D diff on 2026-09-25.
+func TestAMissingNoulIsUnansweredNotACertainNo(t *testing.T) {
+	cases := map[string]string{
+		"field absent": `{"model":"jev-1.13.0","answers":{"q":{"type":"noul"}},"usage":{"input_tokens":1,"output_tokens":1}}`,
+		"field null":   `{"model":"jev-1.13.0","answers":{"q":{"type":"noul","noul":null}},"usage":{"input_tokens":1,"output_tokens":1}}`,
+	}
+	for name, body := range cases {
+		t.Run(name, func(t *testing.T) {
+			srv := newJevServer(t, jevResponseFixture{Status: 200, Body: []byte(body)})
+			ans, _, err := newJevBackend(srv.URL, "k").Ask(context.Background(), noulQ(false, "", ""), template.Egress{})
+			var ue *UnansweredError
+			if !asErr(err, &ue) || ue.Reason != "no_probabilities" {
+				t.Fatalf("expected UnansweredError{no_probabilities}, got err=%v probabilities=%v", err, ans.Probabilities)
+			}
+		})
+	}
+}

@@ -87,13 +87,20 @@ in the plan.
    four mutants on the two bounds each caught)*
    The jev backend's own `backend.UnansweredError` (phase D) adds
    `no_probabilities` (an answer missing under its id, of the wrong type, or
-   with no probabilities) and `bad_noul` (a noul answer's own number is
-   missing, non-finite, or outside [0,1], so the two-key distribution this
-   backend builds from it is never built out of nonsense; choice and score
-   probabilities are passed through unvalidated by this backend on purpose,
-   since `internal/service.validateProbabilities` stays the one authority
-   over them). *(test: `TestAMissingAnswerIsUnanswered`,
-   `TestANoulOutsideZeroOneIsUnanswered`, both in `internal/backend`)*
+   with no probabilities, or a noul answer whose `noul` field is absent or
+   null) and `bad_noul` (a noul answer's own number is non-finite or outside
+   [0,1]), so the two-key distribution this backend builds is never built
+   out of nonsense; choice and score probabilities are passed through
+   unvalidated by this backend on purpose, since
+   `internal/service.validateProbabilities` stays the one authority over
+   them. Until 2026-09-25 this paragraph said a MISSING noul number was
+   refused while the code decoded it into a float64, read absence as 0, and
+   served a certain "false"; the session model's review found it, and the
+   field is now a pointer. *(test: `TestAMissingAnswerIsUnanswered`,
+   `TestANoulOutsideZeroOneIsUnanswered`,
+   `TestAMissingNoulIsUnansweredNotACertainNo` (red first: `{false:1
+   true:0}` served; mutant restoring the zero caught), all in
+   `internal/backend`)*
    *(test: `TestAFailingBackendGivesUnansweredAndNeverAGuess`,
    `TestBadProbabilitiesAreUnansweredNotGuessed`, both in
    `internal/service`; `TestABackendsNamedReasonReachesTheCallerAndTheRecord`

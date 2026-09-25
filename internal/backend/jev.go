@@ -299,7 +299,10 @@ func answerFrom(parsed jevResponse, qType template.Type) (Answer, error) {
 		}
 		return Answer{Probabilities: a.Probabilities}, nil
 	case template.TypeNoul:
-		n := a.Noul
+		if a.Noul == nil {
+			return Answer{}, &UnansweredError{Reason: "no_probabilities"}
+		}
+		n := *a.Noul
 		if math.IsNaN(n) || math.IsInf(n, 0) || n < 0 || n > 1 {
 			return Answer{}, &UnansweredError{Reason: "bad_noul"}
 		}
@@ -366,9 +369,12 @@ type jevAnswerWire struct {
 	// Choice/Score/Yes fields document, because the probability distribution
 	// (or, for noul, the number this maps into one) is the only signal this
 	// backend or internal/service ever trusts.
-	Choice        string             `json:"choice,omitempty"`
-	Score         float64            `json:"score,omitempty"`
-	Noul          float64            `json:"noul,omitempty"`
+	Choice string  `json:"choice,omitempty"`
+	Score  float64 `json:"score,omitempty"`
+	// Noul is a pointer so that an absent or null field stays absent: a
+	// plain float64 decoded it as 0, which became a certain "false" the
+	// server never sent.
+	Noul          *float64           `json:"noul,omitempty"`
 	Confidence    float64            `json:"confidence,omitempty"`
 	Probabilities map[string]float64 `json:"probabilities,omitempty"`
 	Legend        map[string]string  `json:"legend,omitempty"`
