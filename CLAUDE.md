@@ -61,10 +61,12 @@ findings (G115, G703) that every local gate had passed. Run them before pushing.
 
 Each one carries how it is held: `(test: ...)` or `(gate: ...)`. An invariant
 with no check, written as though it had one, is worse than an absent
-invariant. Numbering follows the plan this phase implements
-(`~/Development/typryx-plan-2026-09-25.md`); invariant 9 is listed under NOT
-BUILT YET below rather than skipped, so the numbering stays stable across
-phases.
+invariant. Numbering here is this file's own running sequence, not the
+plan's: the plan's invariant 9 (calibration, never pooled) is now built
+(phase E) and is numbered 22 below, added at the end rather than inserted at
+9, because inserting it there would have forced every invariant after it to
+be renumbered. A number in this list identifies an invariant, not a position
+in the plan.
 
 1. **Never invents an answer.** A backend error, a timeout, missing or
    malformed probabilities, a cap hit: the result is `unanswered` with a
@@ -248,15 +250,50 @@ phases.
     sets a fake `TYPRYX_KEYS` in the process environment and checks it in no
     target's output; golden-output tests per target in the same file)*
 
+22. **Calibration groups by (template, template_version, backend, model),
+    never pooled across any of the four.** This is the plan's own invariant
+    9, built in phase E. Pooling any one of the four hides exactly the case
+    calibration exists to catch: two models under the same template with
+    opposite calibration averaging out to something in between, looking fine
+    on paper while neither one is. *(test:
+    `TestTwoModelsAreNeverScoredAsOne` in `internal/calibration`: a baseline
+    group plus four variants, each differing from it in exactly one of the
+    four fields; mutants dropping any one of the four from the group key,
+    each caught)*
+
+23. **Calibration never mutates the ledger it reads.** `internal/calibration`
+    takes one `os.ReadFile` snapshot of each NDJSON file; unlike
+    `internal/ledger.Open`, it never truncates a torn tail on disk, rewrites
+    a line, or takes a lock, because the service may still be running and
+    appending to the same files while a calibration run reads them. *(test:
+    `TestCalibrationNeverModifiesTheLedgerItReads` in `internal/calibration`:
+    sha256 of both files, one with a torn tail present, unchanged before and
+    after `Run`; mutant: writing the truncated tail back to disk, caught)*
+
+24. **Fewer than `--min-n` scored items gives no verdict, and no bound is
+    judged.** A group's verdict is `insufficient`, never `ok` and never
+    `drift`, until it has enough scored outcomes to say anything; an absurdly
+    tight bound that would otherwise flag it is not even checked. *(test:
+    `TestTooFewTruthsGiveNoVerdict` in `internal/calibration`; mutant:
+    removing the `n < min-n` check, caught)*
+
+25. **A calibration verdict is reported, never acted on.** `typryx
+    calibration` measures and, with `--emit`, writes one `calibration_drift`
+    event; nothing here turns a drift verdict into an enforcement action, a
+    cap change, or a `deny`. Held structurally, not by a runtime check:
+    `internal/calibration.Run` takes no path to write to and has no side
+    effect beyond reading (invariant 23's test is the same evidence, from the
+    other direction); `internal/service` has no dependency on
+    `internal/calibration` at all (`go list -f '{{join .Deps "\n"}}'
+    ./internal/service | grep -c calibration` prints 0); and `--emit`'s own
+    write is one explicit, separate step a caller chooses, gated on a real
+    `--agent-id` (invariant 3's identity rule, applied here too).
+
 ### Not built yet
 
-- **Calibration**: a probability's calibration is computed per template x
-  backend x model, never pooled across them. This is phase E (`typryx
-  calibration`). Nothing in this phase reads `outcomes.ndjson` for that
-  purpose; it is only written.
 - **`jev`** (phase D) does not exist. `TYPRYX_BACKEND=jev` refuses to start,
-  naming it. `openai-logprobs` (phase C) is now built; see README's "Local
-  model backend" for what it does and does not prove.
+  naming it. `openai-logprobs` (phase C) and calibration (phase E) are now
+  built; see README's "Local model backend" and "Calibration" sections.
 - **MCP behind tokenfuse's broker**: untested until phase B2. See README.
 
 ## Tier
