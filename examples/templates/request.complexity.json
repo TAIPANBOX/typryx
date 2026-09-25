@@ -1,0 +1,13 @@
+{
+  "id": "request.complexity",
+  "type": "choice",
+  "instructions": "Classify the complexity of the prompt described in `prompt`, matching tokenfuse's router task classes.",
+  "criteria": {
+    "cheap": "a simple lookup or short factual question a small model answers reliably",
+    "default": "an ordinary request: some reasoning, moderate length, no special tooling",
+    "hard": "a request needing careful multi-step reasoning, long context, or domain depth",
+    "reasoning": "a request that specifically calls for extended chain-of-thought or formal reasoning"
+  },
+  "fields": ["prompt"],
+  "max_state_bytes": 16384
+}

@@ -1,0 +1,62 @@
+{
+  "$comment": [
+    "What this repository contributes to a running stack, and what a check may",
+    "believe about it.",
+    "",
+    "Two buckets, on purpose (see vouchryx's own copy of this comment, which",
+    "this one follows): everything under `checked` is proved against this",
+    "repository by internal/manifest, in this repository's own CI, which has",
+    "the toolchain to build and RUN the thing. Everything under `declared` is a",
+    "statement nobody verifies, and carries its own `why`."
+  ],
+  "schema": "taipanbox.dev/components/v1",
+  "repo": "TAIPANBOX/typryx",
+  "distribution": "not distributed: built from source, no tag yet",
+  "components": [
+    {
+      "name": "typryx",
+      "class": "service",
+      "checked": {
+        "package": "github.com/TAIPANBOX/typryx/cmd/typryx",
+        "listen_default": "127.0.0.1:4320",
+        "health_path": "/healthz",
+        "env": {
+          "TYPRYX_ADDR": { "required": false },
+          "TYPRYX_KEYS": { "required": false },
+          "TYPRYX_ALLOW_OPEN_BIND": { "required": false },
+          "TYPRYX_BACKEND": { "required": true },
+          "TYPRYX_TEMPLATES": { "required": true },
+          "TYPRYX_EVENTS": { "required": false },
+          "TYPRYX_LEDGER_DIR": { "required": false },
+          "TYPRYX_MAX_CALLS_PER_HOUR": { "required": false },
+          "TYPRYX_ALLOW_FREEFORM": { "required": false },
+          "TYPRYX_TIMEOUT_MS": { "required": false }
+        },
+        "missing_required_exit_code": 2,
+        "refuses_an_open_bind_without_a_credential": {
+          "exit_code": 1,
+          "escaped_by_a_key": "TYPRYX_KEYS",
+          "escaped_by_saying_so": "TYPRYX_ALLOW_OPEN_BIND"
+        }
+      },
+      "declared": {
+        "role": {
+          "value": "an optional add-on: answers typed questions (choice, score, yes/no) with a probability, over HTTP and MCP, governing what leaves the box and what it costs",
+          "why": "a sentence about purpose is not a property of the source"
+        },
+        "not_paid_by_default": {
+          "value": "there is no default backend; TYPRYX_BACKEND is required and only 'stub' (free, deterministic, answers nobody's real question) is built in this phase",
+          "why": "a required variable with no default is read off main.go; that the only accepted value today is free is a fact about this phase, not something the manifest schema can express on its own"
+        },
+        "backends_not_built_yet": {
+          "value": ["jev", "openai-logprobs"],
+          "why": "named here so a reader does not have to open the source to learn that TYPRYX_BACKEND=jev refuses to start; both are later phases"
+        },
+        "the_ledger_is_optional": {
+          "value": "unset TYPRYX_LEDGER_DIR: answers are not ledgered and POST /v1/outcome refuses every call with no_ledger",
+          "why": "an optional value needs its unset behaviour on record somewhere a launcher can read it, same reasoning vouchryx gives for VOUCHRYX_REVOKE_KEYS"
+        }
+      }
+    }
+  ]
+}

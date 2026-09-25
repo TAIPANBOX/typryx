@@ -1,0 +1,13 @@
+{
+  "id": "eval.answer_quality",
+  "type": "score",
+  "instructions": "Rate how well the final answer addresses the task described in `task`, on the ordered scale below.",
+  "criteria": [
+    "does not address the task at all",
+    "partially addresses the task, with notable gaps",
+    "addresses the task well, with minor gaps",
+    "fully and clearly addresses the task"
+  ],
+  "fields": ["task", "final_answer"],
+  "max_state_bytes": 16384
+}

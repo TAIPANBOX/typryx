@@ -1,0 +1,11 @@
+{
+  "id": "eval.outcome_met",
+  "type": "noul",
+  "instructions": "The agent's final answer achieves the task described in `task`.",
+  "criteria": {
+    "true": "the final answer fully achieves what the task asked for",
+    "false": "the final answer does not achieve what the task asked for, or only partly does"
+  },
+  "fields": ["task", "final_answer"],
+  "max_state_bytes": 16384
+}
