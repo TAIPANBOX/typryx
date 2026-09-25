@@ -345,7 +345,14 @@ func (s *Service) ask(ctx context.Context, caller Caller, req AskRequest, tmpl t
 
 	if askErr != nil {
 		reason := "backend_error"
-		if bctx.Err() != nil {
+		switch {
+		case ctx.Err() != nil:
+			// The CALLER's own context, not bctx (which wraps it and would
+			// report the same Canceled the instant the parent does): the
+			// other end hung up, which is a different fact from our own
+			// deadline firing and must not be logged as one.
+			reason = "canceled"
+		case bctx.Err() == context.DeadlineExceeded:
 			reason = "timeout"
 		}
 		unansweredData.Reason = reason

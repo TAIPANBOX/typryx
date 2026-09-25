@@ -219,6 +219,34 @@ func TestAFailingBackendGivesUnansweredAndNeverAGuess(t *testing.T) {
 	}
 }
 
+// @test:TestACallerThatGoesAwayIsRecordedAsCanceledNotTimeout
+//
+// bctx (the backend's own deadline context) wraps the caller's ctx: if the
+// CALLER disconnects, bctx.Err() reports context.Canceled just as surely as
+// it would report context.DeadlineExceeded if only our own timeout fired.
+// Collapsing both into "timeout" tells an operator the backend was slow,
+// when the truth is the other end hung up; that is a different fact to log,
+// alert on, or bill.
+func TestACallerThatGoesAwayIsRecordedAsCanceledNotTimeout(t *testing.T) {
+	tb := &backendtest.Backend{Mode: backendtest.ModeHang}
+	d := newService(t, noulTemplate("task"), tb)
+	d.Service.Timeout = time.Second // long enough that only the caller's own cancel fires first
+
+	ctx, cancel := context.WithCancel(context.Background())
+	go func() {
+		time.Sleep(20 * time.Millisecond)
+		cancel()
+	}()
+	result, refusal := d.Service.Ask(ctx, service.Caller{AgentID: "a"},
+		service.AskRequest{Template: "eval.outcome_met", State: json.RawMessage(`{"task":"t"}`)})
+	if refusal != nil {
+		t.Fatalf("expected an unanswered RESULT, not a refusal: %+v", refusal)
+	}
+	if !result.Unanswered || result.Reason != "canceled" {
+		t.Errorf("expected unanswered/canceled, got unanswered=%v reason=%q", result.Unanswered, result.Reason)
+	}
+}
+
 // TestBadProbabilitiesAreUnansweredNotGuessed covers the shapes of a bad
 // probability distribution that are not "empty": present, but wrong.
 func TestBadProbabilitiesAreUnansweredNotGuessed(t *testing.T) {
