@@ -144,3 +144,31 @@ Feature: Typed answers, as an option a customer adds to the stack
     When it is asked a question
     Then the result is unanswered, with a reason
     And the little probability mass that did land on an option is never stretched to sum to one anyway
+
+  # @test:TestAnOperatorCanSeeWhetherAModelsProbabilitiesCanBeTrusted
+  Scenario: An operator can see whether a model's probabilities can be trusted
+    Given a template, backend and model with enough recorded outcomes
+    When the operator runs typryx calibration
+    Then they see its accuracy, its confidence, and a calibration verdict
+    And nothing about it is buried where only a developer would look
+
+  # @test:TestAnOverconfidentSourceIsFlagged
+  Scenario: A model that says 99 percent and is right far less often is flagged
+    Given a template, backend and model that states 99 percent confidence
+    And its actual hit rate is far below that
+    When the operator runs typryx calibration with a calibration bound
+    Then that group's verdict is drift
+
+  # @test:TestTwoModelsAreNeverScoredAsOne
+  Scenario: Two models are never scored as one
+    Given the same template answered by two different models
+    And their calibration is opposite
+    When calibration is computed
+    Then each model gets its own row, never averaged together
+
+  # @test:TestTooFewTruthsGiveNoVerdict
+  Scenario: Too few truths give no verdict
+    Given a template, backend and model with fewer recorded outcomes than the minimum
+    When calibration is computed
+    Then that group's verdict is insufficient
+    And no calibration bound is judged against it

@@ -50,7 +50,40 @@ func rawBool(t *testing.T, b bool) json.RawMessage {
 	return v
 }
 
-// @test:TestCalibrationRequiresALedgerDirectory
+// @test:TestAnOperatorCanSeeWhetherAModelsProbabilitiesCanBeTrusted
+//
+// A well-calibrated group (stated confidence tracks the actual hit rate)
+// gets verdict "ok", with its accuracy, mean confidence and ECE printed
+// where an operator reads them, never buried in a log line only a
+// developer would think to grep for.
+func TestAnOperatorCanSeeWhetherAModelsProbabilitiesCanBeTrusted(t *testing.T) {
+	dir := t.TempDir()
+	var ans []ledger.AnswerRecord
+	var outs []ledger.OutcomeRecord
+	// 100 items at stated 0.8, 80 correct and 20 wrong: well calibrated.
+	for i := 0; i < 100; i++ {
+		id := "a" + string(rune('a'+i%26)) + string(rune('0'+i/26))
+		ans = append(ans, ledger.AnswerRecord{
+			AnswerID: id, Template: "eval.outcome_met", TemplateVersion: "v1", Type: "noul",
+			Backend: "stub", Model: "m1", Probabilities: map[string]float64{"true": 0.8, "false": 0.2},
+		})
+		outs = append(outs, ledger.OutcomeRecord{AnswerID: id, Truth: rawBool(t, i < 80)})
+	}
+	writeCalLedger(t, dir, ans, outs)
+
+	var stdout, stderr bytes.Buffer
+	code := calibrationCmd([]string{"--ledger", dir, "--min-n", "30", "--max-ece", "0.1"}, &stdout, &stderr)
+	if code != 0 {
+		t.Fatalf("expected exit 0 for a well-calibrated group, got %d\nstdout=%s\nstderr=%s", code, stdout.String(), stderr.String())
+	}
+	out := stdout.String()
+	for _, want := range []string{"eval.outcome_met", "stub", "m1", "acc=", "ece=", "ok"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("expected the text report to name %q where an operator reads it, got %q", want, out)
+		}
+	}
+}
+
 func TestCalibrationRequiresALedgerDirectory(t *testing.T) {
 	t.Setenv("TYPRYX_LEDGER_DIR", "")
 	var stdout, stderr bytes.Buffer
@@ -63,7 +96,6 @@ func TestCalibrationRequiresALedgerDirectory(t *testing.T) {
 	}
 }
 
-// @test:TestCalibrationFallsBackToTheEnvironmentVariable
 func TestCalibrationFallsBackToTheEnvironmentVariable(t *testing.T) {
 	dir := t.TempDir()
 	t.Setenv("TYPRYX_LEDGER_DIR", dir)
@@ -74,7 +106,6 @@ func TestCalibrationFallsBackToTheEnvironmentVariable(t *testing.T) {
 	}
 }
 
-// @test:TestCalibrationExitsOneWhenAGroupDrifts
 func TestCalibrationExitsOneWhenAGroupDrifts(t *testing.T) {
 	dir := t.TempDir()
 	var ans []ledger.AnswerRecord
@@ -100,7 +131,6 @@ func TestCalibrationExitsOneWhenAGroupDrifts(t *testing.T) {
 	}
 }
 
-// @test:TestCalibrationJSONIncludesTheBins
 func TestCalibrationJSONIncludesTheBins(t *testing.T) {
 	dir := t.TempDir()
 	writeCalLedger(t, dir, []ledger.AnswerRecord{
@@ -129,7 +159,6 @@ func TestCalibrationJSONIncludesTheBins(t *testing.T) {
 	}
 }
 
-// @test:TestEmitWithoutAgentIDSkipsAndSaysSo
 func TestEmitWithoutAgentIDSkipsAndSaysSo(t *testing.T) {
 	dir := t.TempDir()
 	var ans []ledger.AnswerRecord
@@ -162,7 +191,6 @@ func TestEmitWithoutAgentIDSkipsAndSaysSo(t *testing.T) {
 	}
 }
 
-// @test:TestEmitWithAgentIDWritesTheCalibrationDriftEvent
 func TestEmitWithAgentIDWritesTheCalibrationDriftEvent(t *testing.T) {
 	dir := t.TempDir()
 	var ans []ledger.AnswerRecord
@@ -199,7 +227,6 @@ func TestEmitWithAgentIDWritesTheCalibrationDriftEvent(t *testing.T) {
 	}
 }
 
-// @test:TestEmitRefusesAMalformedAgentID
 func TestEmitRefusesAMalformedAgentID(t *testing.T) {
 	dir := t.TempDir()
 	var stdout, stderr bytes.Buffer

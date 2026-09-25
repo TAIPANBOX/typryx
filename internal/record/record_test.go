@@ -129,7 +129,6 @@ func TestWriteFailedIsCountedWhenTheJournalCannotBeAppended(t *testing.T) {
 	}
 }
 
-// @test:TestACalibrationDriftEventIsHighSeverityAndCarriesTheCrossedBound
 func TestACalibrationDriftEventIsHighSeverityAndCarriesTheCrossedBound(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "events.ndjson")
 	j, err := record.Open(path)
@@ -168,7 +167,6 @@ func TestACalibrationDriftEventIsHighSeverityAndCarriesTheCrossedBound(t *testin
 	}
 }
 
-// @test:TestACalibrationDriftEventWithNoAgentIsSkippedAndCounted
 func TestACalibrationDriftEventWithNoAgentIsSkippedAndCounted(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "events.ndjson")
 	j, err := record.Open(path)

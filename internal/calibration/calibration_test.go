@@ -57,8 +57,6 @@ func truthRaw(t *testing.T, v any) json.RawMessage {
 	return b
 }
 
-// @test:TestExactBrierAndECEOnAFourItemFixture
-//
 // A 4-item fixture, hand-computed, for both a noul and a choice group.
 // This is the ground-truth arithmetic check: if this test passes, the
 // formulas in calibration.go match the ones in the plan and the README,
@@ -125,7 +123,6 @@ func TestExactBrierAndECEOnAFourItemFixture(t *testing.T) {
 	}
 }
 
-// @test:TestExactBrierOnAChoiceFixture
 func TestExactBrierOnAChoiceFixture(t *testing.T) {
 	dir := t.TempDir()
 	ans := []ledger.AnswerRecord{
@@ -151,7 +148,6 @@ func TestExactBrierOnAChoiceFixture(t *testing.T) {
 	}
 }
 
-// @test:TestArgmaxTiesBreakToTheLexicallySmallestKey
 func TestArgmaxTiesBreakToTheLexicallySmallestKey(t *testing.T) {
 	dir := t.TempDir()
 	ans := []ledger.AnswerRecord{
@@ -194,7 +190,6 @@ func simSource(t *testing.T, dir string, n int, seed int64, genP func(r *rand.Ra
 	writeLedger(t, dir, ans, outs)
 }
 
-// @test:TestAPerfectlyCalibratedSourceScoresNearZeroECE
 func TestAPerfectlyCalibratedSourceScoresNearZeroECE(t *testing.T) {
 	for seed := int64(0); seed < 20; seed++ {
 		dir := t.TempDir()
@@ -375,7 +370,6 @@ func TestTooFewTruthsGiveNoVerdict(t *testing.T) {
 	}
 }
 
-// @test:TestOrphanNotScorableAndTruthNotAKeyAreCounted
 func TestOrphanNotScorableAndTruthNotAKeyAreCounted(t *testing.T) {
 	dir := t.TempDir()
 	ans := []ledger.AnswerRecord{
@@ -410,15 +404,12 @@ func TestOrphanNotScorableAndTruthNotAKeyAreCounted(t *testing.T) {
 	}
 }
 
-// @test:TestNoLedgerDirIsAConfigError
 func TestNoLedgerDirIsAConfigError(t *testing.T) {
 	if _, err := calibration.Run(calibration.Options{}); err == nil {
 		t.Error("expected an error when LedgerDir is empty")
 	}
 }
 
-// @test:TestAHostileLedgerNeverPanicsOrProducesAnOutOfRangeMetric
-//
 // 200 seeds of randomly mutated ledger bytes: Run must never panic, and
 // every metric it does produce must stay in its documented range (no NaN,
 // no Inf, accuracy/mean_confidence/ece in [0,1], brier in [0,2]).

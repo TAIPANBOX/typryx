@@ -20,8 +20,6 @@ func sha256OfFile(t *testing.T, path string) [32]byte {
 	return sha256.Sum256(b)
 }
 
-// @test:TestCalibrationNeverModifiesTheLedgerItReads
-//
 // A running typryx may still be appending to these files while calibration
 // reads them; unlike internal/ledger.Open, which truncates a torn tail on
 // disk at startup, this package must never write to either file, not even to
@@ -67,8 +65,6 @@ func TestCalibrationNeverModifiesTheLedgerItReads(t *testing.T) {
 	}
 }
 
-// @test:TestAMalformedLineAnywhereIsSkippedAndCountedNotFatal
-//
 // Unlike internal/ledger.Open (which refuses to open over a malformed
 // non-last line), calibration must still produce a report: a malformed line
 // is skipped and counted, never fatal.
@@ -99,7 +95,6 @@ func TestAMalformedLineAnywhereIsSkippedAndCountedNotFatal(t *testing.T) {
 	}
 }
 
-// @test:TestAMissingLedgerDirectoryIsNotAnErrorItIsAnEmptyReport
 func TestAMissingLedgerDirectoryIsNotAnErrorItIsAnEmptyReport(t *testing.T) {
 	dir := filepath.Join(t.TempDir(), "does-not-exist-yet")
 	report, err := calibration.Run(calibration.Options{LedgerDir: dir, MinN: 1})
