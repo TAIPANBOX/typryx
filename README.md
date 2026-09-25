@@ -414,6 +414,34 @@ Three things this shows, each read off the ledgers rather than assumed:
 Cost of all six hosted runs together: under one US cent (about 360 calls of about 200
 input tokens and 1 output token each).
 
+### How fast is a typed decision, measured (2026-09-25)
+
+The same 60 items, one decision three ways, timed end to end from the caller
+(`examples/speed`; one run each, so read the medians as indicative):
+
+| way of deciding | model | median | p95 | accuracy |
+|---|---|---|---|---|
+| typed, one token, through typryx | gpt-4.1-mini (hosted) | 538 ms | 795 ms | 0.717 |
+| text judge, short verdict | gpt-4.1-mini (hosted) | 723 ms | 1012 ms | 1.000 |
+| reasoning judge | gpt-5.4-mini (hosted) | 562 ms | 896 ms | 1.000 |
+| typed, one token, through typryx | qwen2.5:7b (local) | 148 ms | 159 ms | 0.667 |
+| text judge, short verdict | qwen2.5:7b (local) | 1509 ms | 2103 ms | 1.000 |
+
+What it shows: against a hosted API, the network dominates, and the one-token shortcut
+is about 1.3 times faster than a short text verdict while giving up a third of the
+accuracy; a current small reasoning model was right on all 60 in about the same time.
+On a local model the shortcut is about ten times faster, with the same accuracy cost.
+So a typed decision earns its place by the probability it carries and by where it runs,
+not by raw speed against a small modern model. Vendor speed figures for typed-decision
+models compare against much longer frontier calls; this table is what we measured on
+short judgements.
+
+```sh
+go run ./examples/speed -mode typryx -url http://127.0.0.1:4320 -model "gpt-4.1-mini (typryx)"
+go run ./examples/speed -mode text -url https://api.openai.com/v1 -model gpt-4.1-mini -keyfile KEYFILE
+go run ./examples/speed -mode reasoning -url https://api.openai.com/v1 -model gpt-5.4-mini -keyfile KEYFILE
+```
+
 ![A reliability diagram: the diagonal is perfect calibration, and qwen2.5:3b and qwen2.5:7b's measured bins both sit well below it, meaning both models are confident far more often than they are right](docs/calibration.svg)
 
 ## What leaves the box

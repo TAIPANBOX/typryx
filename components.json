@@ -113,6 +113,23 @@
           "why": "a reader of that gate's exemption list should be able to find why here rather than only in the script"
         }
       }
+    },
+    {
+      "name": "speed-example",
+      "class": "example",
+      "checked": {
+        "package": "github.com/TAIPANBOX/typryx/examples/speed"
+      },
+      "declared": {
+        "role": {
+          "value": "a measurement client, not a service: times one decision three ways (typed one-token through typryx, a text judge, a reasoning judge) on the same items examples/calibration generates, and prints median and p95 latency and accuracy per way",
+          "why": "internal/manifest.TestEveryBinaryThisRepositoryBuildsIsDeclaredAndTheReverse requires every package main this repository builds to be declared here"
+        },
+        "not_a_backend": {
+          "value": "calls typryx's HTTP API and, for the two judge modes, an OpenAI-compatible chat-completions endpoint directly with a key read from a file; exempted from scripts/one-way-out.sh as examples/calibration is",
+          "why": "its judge modes are the baseline typryx is measured against, so they must not go through typryx"
+        }
+      }
     }
   ]
 }
