@@ -3,23 +3,31 @@
 // gave) and outcomes.ndjson (one record per truth that arrived later).
 //
 // Every write is O_APPEND and fsynced, and an in-memory index of answer_id ->
-// AnswerRecord is built once at Open. A torn last line (a process killed
-// mid-write) is skipped and logged rather than refusing to open, because a
-// half-written line at the very end is exactly what a crash produces and it
-// costs nothing but that one record; a malformed line ANYWHERE ELSE means the
-// file is not what this package wrote and refuses to open, because trusting
-// an index built over a file with a hole in the middle is worse than
-// refusing to start.
+// AnswerRecord (plus the set of answer ids that already have an outcome) is
+// built once at Open. A torn last line (a process killed mid-write, leaving
+// a line with no trailing newline) is truncated off the file ON DISK at
+// Open, before the file is reopened for append: left in place, the next
+// O_APPEND write would land immediately after the fragment with no
+// separator, merging into one malformed line that is no longer last and so
+// refuses the NEXT restart. A malformed line that DOES end in a newline is
+// real corruption, not a crash artifact, and refuses to open.
 package ledger
 
 import (
 	"bufio"
+	"bytes"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
 	"sync"
 )
+
+// ErrOutcomeExists is returned by PutOutcome when an outcome has already
+// been recorded for the given answer id: a truth is counted once, even
+// across a restart.
+var ErrOutcomeExists = errors.New("ledger: an outcome already exists for this answer")
 
 // AnswerRecord is one answered ask, as written to answers.ndjson.
 //
@@ -51,20 +59,26 @@ type OutcomeRecord struct {
 	RecordedAt      string          `json:"recorded_at"`
 }
 
-// Ledger holds the two files and the answer index.
+// Ledger holds the two files, the answer index, and the set of answer ids
+// that already have a recorded outcome.
 type Ledger struct {
-	mu           sync.Mutex
-	answersFile  *os.File
-	outcomesFile *os.File
-	index        map[string]AnswerRecord
+	mu            sync.Mutex
+	answersFile   *os.File
+	outcomesFile  *os.File
+	index         map[string]AnswerRecord
+	outcomeExists map[string]bool
 
-	// SkippedTornLines counts torn last lines skipped at Open, for a caller
-	// that wants to log it.
+	// SkippedTornLines counts the files (0, 1 or 2) that had a torn last
+	// line truncated at Open, for a caller that wants to log it.
 	SkippedTornLines int
+	// TornBytes is the total number of bytes dropped truncating torn tails
+	// across both files.
+	TornBytes int
 }
 
 // Open opens (creating if needed) answers.ndjson and outcomes.ndjson under
-// dir, and loads the answer index.
+// dir, truncates a torn tail off either file first, and loads the answer
+// index and the outcome-exists set.
 func Open(dir string) (*Ledger, error) {
 	// dir comes from TYPRYX_LEDGER_DIR, an operator-supplied path read once
 	// at startup, the same shape vouchryx's own gosec suppression documents
@@ -77,7 +91,20 @@ func Open(dir string) (*Ledger, error) {
 	answersPath := filepath.Join(dir, "answers.ndjson")
 	outcomesPath := filepath.Join(dir, "outcomes.ndjson")
 
-	index, tornSkipped, err := loadAnswerIndex(answersPath)
+	answersTorn, err := truncateTornTail(answersPath)
+	if err != nil {
+		return nil, err
+	}
+	outcomesTorn, err := truncateTornTail(outcomesPath)
+	if err != nil {
+		return nil, err
+	}
+
+	index, err := parseAnswerLines(answersPath)
+	if err != nil {
+		return nil, err
+	}
+	outcomeExists, err := parseOutcomeAnswerIDs(outcomesPath)
 	if err != nil {
 		return nil, err
 	}
@@ -91,68 +118,116 @@ func Open(dir string) (*Ledger, error) {
 		_ = af.Close()
 		return nil, fmt.Errorf("ledger: opening %s: %w", outcomesPath, err)
 	}
+
+	tornFiles := 0
+	if answersTorn > 0 {
+		tornFiles++
+	}
+	if outcomesTorn > 0 {
+		tornFiles++
+	}
 	return &Ledger{
 		answersFile:      af,
 		outcomesFile:     of,
 		index:            index,
-		SkippedTornLines: tornSkipped,
+		outcomeExists:    outcomeExists,
+		SkippedTornLines: tornFiles,
+		TornBytes:        answersTorn + outcomesTorn,
 	}, nil
 }
 
-// loadAnswerIndex reads every line of path (which may not exist yet) and
-// returns answer_id -> AnswerRecord. Any malformed line other than the last
-// is a hard error; a malformed last line is treated as a torn write, counted
-// and skipped.
-func loadAnswerIndex(path string) (map[string]AnswerRecord, int, error) {
-	index := map[string]AnswerRecord{}
-	f, err := os.Open(path) // #nosec G304 -- path is joined from TYPRYX_LEDGER_DIR, an operator-supplied path read once at startup
-
+// truncateTornTail removes a torn last write (a line with no trailing
+// newline, the shape a crash mid-fsync leaves) from path, so a later
+// O_APPEND write lands cleanly after the last complete line instead of
+// merging with the wreckage. Returns the number of bytes dropped: 0 when the
+// file does not exist yet (not a torn state) or already ends in a newline.
+func truncateTornTail(path string) (int, error) {
+	data, err := os.ReadFile(path) // #nosec G304 -- operator-supplied path, see Open
 	if os.IsNotExist(err) {
-		return index, 0, nil
+		return 0, nil
 	}
 	if err != nil {
-		return nil, 0, fmt.Errorf("ledger: reading %s: %w", path, err)
+		return 0, fmt.Errorf("ledger: reading %s: %w", path, err)
+	}
+	if len(data) == 0 || data[len(data)-1] == '\n' {
+		return 0, nil
+	}
+	lastNL := bytes.LastIndexByte(data, '\n')
+	validLen := lastNL + 1 // -1+1 == 0 when the whole file is one torn fragment
+	tornBytes := len(data) - validLen
+	if err := os.Truncate(path, int64(validLen)); err != nil {
+		return 0, fmt.Errorf("ledger: truncating a torn tail from %s: %w", path, err)
+	}
+	return tornBytes, nil
+}
+
+// parseAnswerLines reads path, already torn-tail-truncated by Open, and
+// returns answer_id -> AnswerRecord. With the torn tail already removed,
+// every remaining line is expected to be well-formed; anything malformed
+// here is real corruption, not a crash artifact, and refuses to open.
+func parseAnswerLines(path string) (map[string]AnswerRecord, error) {
+	index := map[string]AnswerRecord{}
+	err := scanLines(path, func(lineNum int, line string) error {
+		var rec AnswerRecord
+		if err := json.Unmarshal([]byte(line), &rec); err != nil {
+			return fmt.Errorf("ledger: %s line %d is malformed: %w", path, lineNum, err)
+		}
+		if rec.AnswerID == "" {
+			return fmt.Errorf("ledger: %s line %d has no answer_id", path, lineNum)
+		}
+		index[rec.AnswerID] = rec
+		return nil
+	})
+	return index, err
+}
+
+// parseOutcomeAnswerIDs reads path, already torn-tail-truncated by Open, and
+// returns the set of answer ids that already have a recorded outcome.
+func parseOutcomeAnswerIDs(path string) (map[string]bool, error) {
+	seen := map[string]bool{}
+	err := scanLines(path, func(lineNum int, line string) error {
+		var rec OutcomeRecord
+		if err := json.Unmarshal([]byte(line), &rec); err != nil {
+			return fmt.Errorf("ledger: %s line %d is malformed: %w", path, lineNum, err)
+		}
+		if rec.AnswerID == "" {
+			return fmt.Errorf("ledger: %s line %d has no answer_id", path, lineNum)
+		}
+		seen[rec.AnswerID] = true
+		return nil
+	})
+	return seen, err
+}
+
+// scanLines calls fn for every non-empty line of path, 1-indexed. A missing
+// file is not an error: it simply has no lines yet.
+func scanLines(path string, fn func(lineNum int, line string) error) error {
+	f, err := os.Open(path) // #nosec G304 -- operator-supplied path, see Open
+	if os.IsNotExist(err) {
+		return nil
+	}
+	if err != nil {
+		return fmt.Errorf("ledger: reading %s: %w", path, err)
 	}
 	defer f.Close()
 
-	var lines []string
 	sc := bufio.NewScanner(f)
 	sc.Buffer(make([]byte, 0, 64*1024), 16*1024*1024)
+	lineNum := 0
 	for sc.Scan() {
+		lineNum++
 		line := sc.Text()
 		if line == "" {
 			continue
 		}
-		lines = append(lines, line)
+		if err := fn(lineNum, line); err != nil {
+			return err
+		}
 	}
 	if err := sc.Err(); err != nil {
-		return nil, 0, fmt.Errorf("ledger: scanning %s: %w", path, err)
+		return fmt.Errorf("ledger: scanning %s: %w", path, err)
 	}
-
-	torn := 0
-	for i, line := range lines {
-		var rec AnswerRecord
-		if err := json.Unmarshal([]byte(line), &rec); err != nil {
-			if i == len(lines)-1 {
-				// The last line, and only the last line, may be a torn
-				// write: a process killed mid-fsync leaves a half-written
-				// line at the end of the file, never in the middle.
-				torn++
-				continue
-			}
-			return nil, 0, fmt.Errorf("ledger: %s line %d is malformed and is not the last line, "+
-				"so this is not a torn write: %w", path, i+1, err)
-		}
-		if rec.AnswerID == "" {
-			if i == len(lines)-1 {
-				torn++
-				continue
-			}
-			return nil, 0, fmt.Errorf("ledger: %s line %d has no answer_id", path, i+1)
-		}
-		index[rec.AnswerID] = rec
-	}
-	return index, torn, nil
+	return nil
 }
 
 // PutAnswer appends an answer record and adds it to the index.

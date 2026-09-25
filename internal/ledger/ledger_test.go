@@ -172,6 +172,46 @@ func TestATornLastLineIsSkippedNotFatal(t *testing.T) {
 	}
 }
 
+// @test:TestAnAnswerWrittenAfterATornLineSurvivesTheNextRestart
+//
+// A torn last line, left un-truncated on disk, sits right where the next
+// PutAnswer's bytes land: O_APPEND writes immediately after it, with no
+// separator, merging the fragment with the new, otherwise well-formed line.
+// Open must truncate the file back to just after the last complete line
+// BEFORE it is reopened for append, so a restart after a crash keeps
+// writing clean lines rather than building wreckage forever.
+func TestAnAnswerWrittenAfterATornLineSurvivesTheNextRestart(t *testing.T) {
+	dir := t.TempDir()
+	good, _ := json.Marshal(AnswerRecord{AnswerID: "a1", Template: "t", TemplateVersion: "v1"})
+	content := string(good) + "\n" + `{"answer_id":"a2","templ` // torn: cut mid-write, no trailing newline
+	if err := os.WriteFile(filepath.Join(dir, "answers.ndjson"), []byte(content), 0o644); err != nil {
+		t.Fatalf("writing fixture: %v", err)
+	}
+
+	l1, err := Open(dir)
+	if err != nil {
+		t.Fatalf("first Open: %v", err)
+	}
+	if err := l1.PutAnswer(AnswerRecord{AnswerID: "a3", Template: "t", TemplateVersion: "v1"}); err != nil {
+		t.Fatalf("PutAnswer: %v", err)
+	}
+	if err := l1.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+
+	l2, err := Open(dir)
+	if err != nil {
+		t.Fatalf("the second Open must succeed (the torn fragment was truncated before the new line was appended), got: %v", err)
+	}
+	defer l2.Close()
+	if _, ok := l2.GetAnswer("a1"); !ok {
+		t.Error("the earlier, complete answer should still be indexed after the restart")
+	}
+	if _, ok := l2.GetAnswer("a3"); !ok {
+		t.Error("the answer written after the torn line should be indexed cleanly, not merged with the wreckage")
+	}
+}
+
 // TestAMalformedLineNotLastRefusesToOpen: the same malformed content, but
 // NOT at the end of the file, is not a torn write; it means the file is not
 // what this package wrote, and Open refuses rather than building an index it
