@@ -90,6 +90,13 @@ Feature: Typed answers, as an option a customer adds to the stack
     When it lists the tools and calls the ask tool with a template and a state
     Then it gets the same typed answer the HTTP route would give
 
+  # @test:TestEveryToolSchemaIsValidJSONSchemaForStrictClients
+  Scenario: A strict MCP client such as Claude Code accepts the tool list
+    Given typryx publishes tools/list over MCP
+    When a tool has no required arguments
+    Then its schema names an empty array, never a JSON null
+    And every name a tool's schema requires is one of its own properties
+
   # @test:TestTheManifestMatchesWhatTheBinaryReads
   Scenario: What the service declares about itself is true
     Given the component manifest

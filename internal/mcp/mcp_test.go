@@ -420,6 +420,59 @@ func TestGetOnMCPRouteIsRejected(t *testing.T) {
 	}
 }
 
+// @test:TestEveryToolSchemaIsValidJSONSchemaForStrictClients
+//
+// Found running Claude Code 2.1.270 against typryx (2026-09-25): tools/list
+// answered with list_questions's inputSchema carrying `"required":null`,
+// because Schema.Required is a nil slice and encoding/json marshals a nil
+// slice as JSON null rather than an empty array. Claude Code silently
+// dropped typryx's whole tool list rather than reporting an error; the model
+// then had no tool to call at all. A proxy that rewrote only that one
+// `"required":null` to `"required":[]` made Claude Code call `ask`
+// successfully. This checks the shape a strict client actually parses:
+// `required` must be a JSON array, never null, for every tool typryx
+// publishes, with freeform on and off, and every name it lists must be one
+// of the tool's own properties.
+func TestEveryToolSchemaIsValidJSONSchemaForStrictClients(t *testing.T) {
+	for _, freeform := range []bool{false, true} {
+		ts, _ := newTestStack(t, freeform)
+		out := rpcCall(t, ts, "tools/list", "k1", nil)
+		result, ok := out["result"].(map[string]any)
+		if !ok {
+			t.Fatalf("freeform=%v: expected a result, got %v", freeform, out)
+		}
+		tools, ok := result["tools"].([]any)
+		if !ok || len(tools) == 0 {
+			t.Fatalf("freeform=%v: expected a non-empty tool list, got %v", freeform, result)
+		}
+		for _, raw := range tools {
+			tool := raw.(map[string]any)
+			name, _ := tool["name"].(string)
+			schema, ok := tool["inputSchema"].(map[string]any)
+			if !ok {
+				t.Fatalf("freeform=%v, tool %q: inputSchema is not an object: %v", freeform, name, tool["inputSchema"])
+			}
+			if schema["type"] != "object" {
+				t.Errorf("freeform=%v, tool %q: expected type object, got %v", freeform, name, schema["type"])
+			}
+			props, ok := schema["properties"].(map[string]any)
+			if !ok {
+				t.Fatalf("freeform=%v, tool %q: properties is not an object: %v", freeform, name, schema["properties"])
+			}
+			required, ok := schema["required"].([]any)
+			if !ok {
+				t.Fatalf("freeform=%v, tool %q: required is not a JSON array (got %#v, likely null)", freeform, name, schema["required"])
+			}
+			for _, r := range required {
+				rn, _ := r.(string)
+				if _, ok := props[rn]; !ok {
+					t.Errorf("freeform=%v, tool %q: required name %q is not in properties", freeform, name, rn)
+				}
+			}
+		}
+	}
+}
+
 // TestMCPBodyParserNeverPanicsOnHostileInput is a seeded sweep of
 // random/mutated JSON-RPC bodies: the server must always answer with SOME
 // HTTP response and never crash.

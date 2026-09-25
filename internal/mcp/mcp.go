@@ -241,13 +241,22 @@ func (t Tool) MarshalJSON() ([]byte, error) {
 		}
 		props[k] = prop
 	}
+	// t.InputSchema.Required is nil for a tool with no required fields
+	// (list_questions), and encoding/json marshals a nil []string as JSON
+	// null, not []. A strict client is entitled to expect an array here;
+	// Claude Code 2.1.270 silently dropped typryx's whole tool list rather
+	// than tolerate the null, so this is never left to marshal a nil slice.
+	required := t.InputSchema.Required
+	if required == nil {
+		required = []string{}
+	}
 	return json.Marshal(map[string]any{
 		"name":        t.Name,
 		"description": t.Description,
 		"inputSchema": map[string]any{
 			"type":                 "object",
 			"properties":           props,
-			"required":             t.InputSchema.Required,
+			"required":             required,
 			"additionalProperties": t.InputSchema.AdditionalProperties,
 		},
 	})
