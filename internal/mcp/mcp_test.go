@@ -360,18 +360,32 @@ func TestAskFreeformRefusedResultIsMarkedIsError(t *testing.T) {
 	}
 }
 
-func TestNotificationsInitializedReturnsNoContent(t *testing.T) {
-	ts, _ := newTestStack(t, false)
-	body, _ := json.Marshal(map[string]any{"jsonrpc": "2.0", "method": "notifications/initialized"})
-	req, _ := http.NewRequest(http.MethodPost, ts.URL+"/mcp", bytes.NewReader(body))
-	req.Header.Set(door.KeyHeader, "k1")
-	resp, err := http.DefaultClient.Do(req)
-	if err != nil {
-		t.Fatalf("request: %v", err)
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusNoContent {
-		t.Errorf("expected 204, got %d", resp.StatusCode)
+// TestANotificationIsAnswered202WithNoBody holds MCP 2025-06-18's Streamable
+// HTTP transport rule: a JSON-RPC notification (a request object with no
+// "id" member) MUST be answered 202 Accepted with no body. "notifications/
+// initialized" is the notification a real client actually sends; a second,
+// invented method name checks the rule is general (keyed on the absent
+// "id", not on that one method name) rather than a special case for it.
+func TestANotificationIsAnswered202WithNoBody(t *testing.T) {
+	for _, method := range []string{"notifications/initialized", "notifications/some_future_kind"} {
+		t.Run(method, func(t *testing.T) {
+			ts, _ := newTestStack(t, false)
+			body, _ := json.Marshal(map[string]any{"jsonrpc": "2.0", "method": method})
+			req, _ := http.NewRequest(http.MethodPost, ts.URL+"/mcp", bytes.NewReader(body))
+			req.Header.Set(door.KeyHeader, "k1")
+			resp, err := http.DefaultClient.Do(req)
+			if err != nil {
+				t.Fatalf("request: %v", err)
+			}
+			defer resp.Body.Close()
+			if resp.StatusCode != http.StatusAccepted {
+				t.Errorf("expected 202, got %d", resp.StatusCode)
+			}
+			b, _ := io.ReadAll(resp.Body)
+			if len(b) != 0 {
+				t.Errorf("expected no body, got %q", b)
+			}
+		})
 	}
 }
 

@@ -75,6 +75,19 @@ func (s *Server) ServeMCP(w http.ResponseWriter, r *http.Request, agentID string
 		return
 	}
 
+	// A JSON-RPC notification is a request object with no "id" member (the
+	// JSON-RPC 2.0 spec, and MCP 2025-06-18's Streamable HTTP transport
+	// section, which says the transport MUST answer such a POST 202
+	// Accepted with no body). This is keyed on the absent id, not on the
+	// method name, so it holds for "notifications/initialized" and for any
+	// other notification a future client sends. req.ID is nil only when the
+	// field was absent from the JSON; an explicit "id":null is a (poorly
+	// formed but present) id and is not treated as a notification.
+	if len(req.ID) == 0 {
+		w.WriteHeader(http.StatusAccepted)
+		return
+	}
+
 	switch req.Method {
 	case "initialize":
 		writeRPC(w, rpcResponse{JSONRPC: "2.0", ID: req.ID, Result: map[string]any{
@@ -87,7 +100,11 @@ func (s *Server) ServeMCP(w http.ResponseWriter, r *http.Request, agentID string
 	case "tools/call":
 		s.call(r, w, req, agentID)
 	case "notifications/initialized":
-		w.WriteHeader(http.StatusNoContent)
+		// Only reachable for a non-conforming call that names this method
+		// but carries an id; the conforming, id-less case is caught above.
+		// Answered the same way (202, no body) rather than as a request
+		// with no result, since there is nothing to return either way.
+		w.WriteHeader(http.StatusAccepted)
 	default:
 		writeRPC(w, rpcResponse{JSONRPC: "2.0", ID: req.ID, Error: &rpcError{codeMethodNotFound, "unknown method " + req.Method}})
 	}
