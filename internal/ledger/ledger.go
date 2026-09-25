@@ -66,7 +66,12 @@ type Ledger struct {
 // Open opens (creating if needed) answers.ndjson and outcomes.ndjson under
 // dir, and loads the answer index.
 func Open(dir string) (*Ledger, error) {
-	if err := os.MkdirAll(dir, 0o755); err != nil {
+	// dir comes from TYPRYX_LEDGER_DIR, an operator-supplied path read once
+	// at startup, the same shape vouchryx's own gosec suppression documents
+	// for its operator-config reads. 0o750/0o600 rather than the more
+	// permissive defaults: the ledger holds a hash of every egressed field
+	// and the answers/outcomes an operator asked for, not public output.
+	if err := os.MkdirAll(dir, 0o750); err != nil { // #nosec G301 -- operator-supplied path, see above
 		return nil, fmt.Errorf("ledger: creating %s: %w", dir, err)
 	}
 	answersPath := filepath.Join(dir, "answers.ndjson")
@@ -77,13 +82,13 @@ func Open(dir string) (*Ledger, error) {
 		return nil, err
 	}
 
-	af, err := os.OpenFile(answersPath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o644)
+	af, err := os.OpenFile(answersPath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o600) // #nosec G304 G302 -- operator-supplied path, see above
 	if err != nil {
 		return nil, fmt.Errorf("ledger: opening %s: %w", answersPath, err)
 	}
-	of, err := os.OpenFile(outcomesPath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o644)
+	of, err := os.OpenFile(outcomesPath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o600) // #nosec G304 G302 -- operator-supplied path, see above
 	if err != nil {
-		af.Close()
+		_ = af.Close()
 		return nil, fmt.Errorf("ledger: opening %s: %w", outcomesPath, err)
 	}
 	return &Ledger{
@@ -100,7 +105,8 @@ func Open(dir string) (*Ledger, error) {
 // and skipped.
 func loadAnswerIndex(path string) (map[string]AnswerRecord, int, error) {
 	index := map[string]AnswerRecord{}
-	f, err := os.Open(path)
+	f, err := os.Open(path) // #nosec G304 -- path is joined from TYPRYX_LEDGER_DIR, an operator-supplied path read once at startup
+
 	if os.IsNotExist(err) {
 		return index, 0, nil
 	}

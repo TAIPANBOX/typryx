@@ -196,7 +196,7 @@ func buildRuntime(cfg *config, log *slog.Logger) (*runtime, error) {
 	if cfg.ledgerDir != "" {
 		led, err = ledger.Open(cfg.ledgerDir)
 		if err != nil {
-			journal.Close()
+			_ = journal.Close()
 			return nil, err
 		}
 		if led.SkippedTornLines > 0 {

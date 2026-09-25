@@ -288,7 +288,7 @@ func LoadDir(dir string) (*Registry, []LoadError, error) {
 			continue
 		}
 		path := filepath.Join(dir, e.Name())
-		b, err := os.ReadFile(path)
+		b, err := os.ReadFile(path) // #nosec G304 -- path is joined from TYPRYX_TEMPLATES, an operator-supplied directory, and a name os.ReadDir just listed inside it
 		if err != nil {
 			loadErrs = append(loadErrs, LoadError{File: e.Name(), Err: err})
 			continue
