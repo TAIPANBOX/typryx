@@ -526,7 +526,7 @@ its retry loop and `answerFrom`'s unknown-type case, both guarded ahead of them 
 loop, proved by starting the real binary in `internal/manifest` and by process-level
 tests in `cmd/typryx/main_test.go` rather than by in-process instrumentation.
 
-`scripts/gates-have-teeth.sh` plants 13 faults, one per gate behaviour, and requires
+`scripts/gates-have-teeth.sh` plants 14 faults, one per gate behaviour, and requires
 each gate to fail on its own fault and pass on what it must not catch. Eleven defects
 were found in a whole-file review on 2026-09-25 and fixed red-first (see CLAUDE.md for
 the mutants each fix's test catches); a twelfth, the `required: null` schema defect
