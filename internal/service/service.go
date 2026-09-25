@@ -14,6 +14,7 @@ import (
 	"math"
 	"strconv"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/TAIPANBOX/typryx/internal/backend"
@@ -145,10 +146,23 @@ type Service struct {
 	AllowFreeform         bool
 	FreeformMaxStateBytes int
 
+	// ledgerFailures counts PutAnswer failures: the answer itself is still
+	// served (the backend already answered), but a write failure means it
+	// cannot later be scored, which is a fact an operator has to be able to
+	// see rather than one silently dropped. Atomic because Ask and
+	// LedgerFailures (read from GET /healthz) run concurrently.
+	ledgerFailures atomic.Int64
+
 	// now and randomID are seams for tests; both default when the zero value
 	// is used through New.
 	now      func() time.Time
 	randomID func() string
+}
+
+// LedgerFailures reports how many PutAnswer calls have failed, for GET
+// /healthz to surface alongside the journal's own counts.
+func (s *Service) LedgerFailures() int64 {
+	return s.ledgerFailures.Load()
 }
 
 // New builds a Service with real clock and id generation.
@@ -336,10 +350,10 @@ func (s *Service) ask(ctx context.Context, caller Caller, req AskRequest, tmpl t
 		if err := s.Ledger.PutAnswer(rec); err != nil {
 			// The answer was already produced; a ledger write failure does
 			// not turn a real answer into a refusal. It does mean this
-			// answer cannot later be scored, which is a fact for an
-			// operator to see in their own logs, not a reason to lie to the
-			// caller about what the backend said.
-			_ = err
+			// answer cannot later be scored, which is counted here rather
+			// than silently dropped: LedgerFailures is surfaced at
+			// GET /healthz for an operator to see.
+			s.ledgerFailures.Add(1)
 		}
 	}
 

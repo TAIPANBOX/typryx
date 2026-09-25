@@ -129,6 +129,70 @@ func TestHealthzNeedsNoCredential(t *testing.T) {
 	}
 }
 
+// @test:TestALedgerWriteFailureIsCountedAndVisibleAtHealthz
+//
+// A ledger write failure must never turn a real answer into a refusal (the
+// caller already got a valid answer from the backend), but it also must not
+// be swallowed silently: an operator needs to see it. Counted on the
+// service and exposed at GET /healthz next to the journal counts.
+func TestALedgerWriteFailureIsCountedAndVisibleAtHealthz(t *testing.T) {
+	dir := t.TempDir()
+	tmplDir := filepath.Join(dir, "templates")
+	os.Mkdir(tmplDir, 0o755)
+	tmpl := template.Template{ID: "eval.outcome_met", Type: template.TypeNoul, Instructions: "is it true", Fields: []string{"task"}}
+	b, _ := json.Marshal(tmpl)
+	os.WriteFile(filepath.Join(tmplDir, "t.json"), b, 0o644)
+	reg, _, _ := template.LoadDir(tmplDir)
+	j, _ := record.Open("")
+	led, err := ledger.Open(filepath.Join(dir, "ledger"))
+	if err != nil {
+		t.Fatalf("ledger.Open: %v", err)
+	}
+	// Close the ledger's files out from under the service: PutAnswer will
+	// now fail on every call, which is the write-failure path under test.
+	if err := led.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+
+	svc := service.New()
+	svc.Templates = reg
+	svc.Backend = stubBackend{}
+	svc.Cap = service.NewCap(1000)
+	svc.Journal = j
+	svc.Ledger = led
+
+	srv := &api.Server{Keys: door.ParseKeys(""), Service: svc, MCP: &noopMCP{}}
+	ts := httptest.NewServer(api.NewMux(srv))
+	t.Cleanup(ts.Close)
+
+	askResp, err := http.Post(ts.URL+"/v1/ask", "application/json",
+		bytes.NewReader([]byte(`{"template":"eval.outcome_met","state":{"task":"t"}}`)))
+	if err != nil {
+		t.Fatalf("ask: %v", err)
+	}
+	defer askResp.Body.Close()
+	if askResp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(askResp.Body)
+		t.Fatalf("the answer itself must still succeed despite the ledger failure, got %d: %s", askResp.StatusCode, body)
+	}
+
+	healthResp, err := http.Get(ts.URL + "/healthz")
+	if err != nil {
+		t.Fatalf("healthz: %v", err)
+	}
+	defer healthResp.Body.Close()
+	var body map[string]any
+	json.NewDecoder(healthResp.Body).Decode(&body)
+	ledgerCounts, ok := body["ledger"].(map[string]any)
+	if !ok {
+		t.Fatalf("expected a ledger object in /healthz, got %v", body)
+	}
+	failed, _ := ledgerCounts["write_failed"].(float64)
+	if failed != 1 {
+		t.Errorf("expected ledger.write_failed=1, got %v (full body: %v)", ledgerCounts["write_failed"], body)
+	}
+}
+
 func TestOtherRoutesRefuseWithoutACredential(t *testing.T) {
 	ts, _ := newTestServer(t, door.ParseKeys("k1"))
 	for _, path := range []string{"/v1/ask", "/v1/outcome", "/v1/templates", "/mcp"} {

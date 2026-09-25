@@ -68,6 +68,9 @@ func (s *Server) handleHealthz(w http.ResponseWriter, r *http.Request) {
 			"skipped_no_agent": skipped,
 			"write_failed":     failed,
 		},
+		"ledger": map[string]any{
+			"write_failed": s.Service.LedgerFailures(),
+		},
 	})
 }
 
