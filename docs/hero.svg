@@ -1,0 +1,112 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1280" height="720" viewBox="0 0 1280 720" role="img" aria-label="An agent, optionally through the tokenfuse MCP broker, reaches typryx: door, template, egress filter, hourly cap, then a backend; the answer and its record come back">
+<defs>
+  <linearGradient id="bg" x1="0" y1="0" x2="0" y2="1">
+    <stop offset="0" stop-color="#0a0e16"/><stop offset="1" stop-color="#0d1117"/>
+  </linearGradient>
+  <linearGradient id="accent" x1="0" y1="0" x2="1" y2="0">
+    <stop offset="0" stop-color="#2dd4bf"/><stop offset="1" stop-color="#4493f8"/>
+  </linearGradient>
+  <pattern id="grid" width="40" height="40" patternUnits="userSpaceOnUse">
+    <path d="M 40 0 L 0 0 0 40" fill="none" stroke="#161b22" stroke-width="1"/>
+  </pattern>
+  <filter id="glow" x="-60%" y="-60%" width="220%" height="220%">
+    <feGaussianBlur stdDeviation="7" result="b"/><feMerge><feMergeNode in="b"/><feMergeNode in="SourceGraphic"/></feMerge>
+  </filter>
+</defs>
+
+<rect width="1280" height="720" fill="url(#bg)"/>
+<rect width="1280" height="720" fill="url(#grid)" opacity="0.5"/>
+<rect width="1280" height="4" fill="url(#accent)"/>
+
+<text x="640" y="46" text-anchor="middle" font-family="ui-sans-serif,system-ui,sans-serif" font-size="15" fill="#69788b">a question in, a typed answer with a probability out</text>
+
+<!-- connector: agent -> broker -->
+<line x1="256" y1="380" x2="316" y2="380" stroke="#283341" stroke-width="2"/>
+<path d="M 316 380 l -11 -6 l 0 12 z" fill="#4493f8"/>
+<circle cx="256" cy="380" r="4" fill="#4493f8"><animate attributeName="cx" values="256;316" dur="4s" repeatCount="indefinite"/><animate attributeName="opacity" values="0;1;1;0" keyTimes="0;0.12;0.85;1" dur="4s" repeatCount="indefinite"/></circle>
+
+<!-- connector: broker -> hub -->
+<line x1="536" y1="380" x2="596" y2="380" stroke="#283341" stroke-width="2"/>
+<path d="M 596 380 l -11 -6 l 0 12 z" fill="#4493f8"/>
+<circle cx="536" cy="380" r="4" fill="#4493f8"><animate attributeName="cx" values="536;596" dur="4s" begin="0.3s" repeatCount="indefinite"/><animate attributeName="opacity" values="0;1;1;0" keyTimes="0;0.12;0.85;1" dur="4s" begin="0.3s" repeatCount="indefinite"/></circle>
+
+<!-- left: your agent -->
+<rect x="60" y="310" width="196" height="140" rx="10" fill="#141a23" stroke="#283341" stroke-width="1.4"/>
+<rect x="60" y="310" width="6" height="140" rx="3" fill="#4493f8"/>
+<text x="84" y="345" font-family="ui-sans-serif,system-ui,sans-serif" font-size="17" font-weight="700" fill="#e6edf3">your agent</text>
+<text x="84" y="372" font-family="ui-monospace,SFMono-Regular,Menlo,monospace" font-size="12" fill="#9aa7b8">Claude Code</text>
+<text x="84" y="392" font-family="ui-monospace,SFMono-Regular,Menlo,monospace" font-size="12" fill="#9aa7b8">any MCP client</text>
+<text x="84" y="412" font-family="ui-monospace,SFMono-Regular,Menlo,monospace" font-size="12" fill="#9aa7b8">or your own code</text>
+
+<!-- optional broker, dashed -->
+<rect x="316" y="310" width="220" height="140" rx="10" fill="#141a23" stroke="#69788b" stroke-width="1.4" stroke-dasharray="6 5"/>
+<text x="340" y="341" font-family="ui-sans-serif,system-ui,sans-serif" font-size="15" font-weight="700" fill="#9aa7b8">tokenfuse MCP broker</text>
+<text x="340" y="364" font-family="ui-sans-serif,system-ui,sans-serif" font-size="11.5" fill="#69788b">optional: keys, policy,</text>
+<text x="340" y="380" font-family="ui-sans-serif,system-ui,sans-serif" font-size="11.5" fill="#69788b">tool_call record</text>
+<rect x="340" y="392" width="72" height="20" rx="10" fill="#0d1117" stroke="#69788b"/>
+<text x="376" y="406" text-anchor="middle" font-family="ui-sans-serif,system-ui,sans-serif" font-size="10" fill="#9aa7b8">optional</text>
+
+<!-- hub: typryx, stacked stages -->
+<rect x="596" y="80" width="340" height="560" rx="14" fill="none" stroke="#2dd4bf" stroke-width="3" filter="url(#glow)" opacity="0.7">
+  <animate attributeName="opacity" values="0.4;0.75;0.4" dur="5s" repeatCount="indefinite"/>
+</rect>
+<rect x="596" y="80" width="340" height="560" rx="14" fill="#141a23" stroke="#2dd4bf" stroke-width="1.6"/>
+<text x="766" y="116" text-anchor="middle" font-family="ui-sans-serif,system-ui,sans-serif" font-size="21" font-weight="700" fill="#e6edf3">typryx</text>
+<line x1="618" y1="130" x2="914" y2="130" stroke="#222b38"/>
+
+<g font-family="ui-monospace,SFMono-Regular,Menlo,monospace">
+  <rect x="618" y="146" width="296" height="82" rx="8" fill="#1b2331" stroke="#283341"/>
+  <text x="634" y="172" font-size="14.5" font-weight="700" fill="#2dd4bf">door</text>
+  <text x="634" y="196" font-size="11.5" fill="#9aa7b8">X-Typryx-Key -&gt; agent://</text>
+  <text x="634" y="214" font-size="11.5" fill="#69788b">never a claimed header</text>
+
+  <rect x="618" y="238" width="296" height="82" rx="8" fill="#1b2331" stroke="#283341"/>
+  <text x="634" y="264" font-size="14.5" font-weight="700" fill="#4493f8">template</text>
+  <text x="634" y="288" font-size="11.5" fill="#9aa7b8">versioned by content digest</text>
+  <text x="634" y="306" font-size="11.5" fill="#69788b">choice, score, or noul</text>
+
+  <rect x="618" y="330" width="296" height="82" rx="8" fill="#1b2331" stroke="#283341"/>
+  <text x="634" y="356" font-size="14.5" font-weight="700" fill="#8b7cf6">egress filter</text>
+  <text x="634" y="380" font-size="11.5" fill="#9aa7b8">only the named fields leave</text>
+  <text x="634" y="398" font-size="11.5" fill="#69788b">the rest is held back, counted</text>
+
+  <rect x="618" y="422" width="296" height="82" rx="8" fill="#1b2331" stroke="#283341"/>
+  <text x="634" y="448" font-size="14.5" font-weight="700" fill="#d29922">hourly cap</text>
+  <text x="634" y="472" font-size="11.5" fill="#9aa7b8">calls per hour, default 1000</text>
+  <text x="634" y="490" font-size="11.5" fill="#69788b">counted only past the filter</text>
+
+  <rect x="618" y="514" width="296" height="106" rx="8" fill="#1b2331" stroke="#283341"/>
+  <text x="634" y="538" font-size="14.5" font-weight="700" fill="#3fb950">backend</text>
+  <text x="634" y="560" font-size="11.5" fill="#9aa7b8">stub, deterministic, free</text>
+  <rect x="634" y="568" width="256" height="22" rx="11" fill="#0d1117" stroke="#69788b"/>
+  <text x="762" y="583" text-anchor="middle" font-size="10.5" fill="#69788b">jev, local model: not built yet</text>
+  <text x="634" y="608" font-size="11" fill="#69788b">a swappable interface, not a promise</text>
+</g>
+
+<!-- connectors: hub -> answer, hub -> journal -->
+<line x1="936" y1="240" x2="996" y2="240" stroke="#283341" stroke-width="2"/>
+<path d="M 996 240 l -11 -6 l 0 12 z" fill="#3fb950"/>
+<circle cx="936" cy="240" r="4" fill="#3fb950"><animate attributeName="cx" values="936;996" dur="4s" begin="0.6s" repeatCount="indefinite"/><animate attributeName="opacity" values="0;1;1;0" keyTimes="0;0.12;0.85;1" dur="4s" begin="0.6s" repeatCount="indefinite"/></circle>
+
+<line x1="936" y1="480" x2="996" y2="480" stroke="#283341" stroke-width="2"/>
+<path d="M 996 480 l -11 -6 l 0 12 z" fill="#d29922"/>
+<circle cx="936" cy="480" r="4" fill="#d29922"><animate attributeName="cx" values="936;996" dur="4s" begin="0.9s" repeatCount="indefinite"/><animate attributeName="opacity" values="0;1;1;0" keyTimes="0;0.12;0.85;1" dur="4s" begin="0.9s" repeatCount="indefinite"/></circle>
+
+<!-- right: answer -->
+<rect x="996" y="170" width="224" height="140" rx="10" fill="#141a23" stroke="#3fb950" stroke-width="1.4"/>
+<text x="1020" y="202" font-family="ui-sans-serif,system-ui,sans-serif" font-size="16" font-weight="700" fill="#e6edf3">answer</text>
+<text x="1020" y="228" font-family="ui-monospace,SFMono-Regular,Menlo,monospace" font-size="11.5" fill="#9aa7b8">probability per option</text>
+<text x="1020" y="248" font-family="ui-monospace,SFMono-Regular,Menlo,monospace" font-size="11.5" fill="#9aa7b8">backend + model version</text>
+<text x="1020" y="268" font-family="ui-monospace,SFMono-Regular,Menlo,monospace" font-size="11.5" fill="#9aa7b8">or: unanswered, with why</text>
+<text x="1020" y="292" font-family="ui-monospace,SFMono-Regular,Menlo,monospace" font-size="11" fill="#3fb950">never an invented guess</text>
+
+<!-- right: journal + ledger -->
+<rect x="996" y="410" width="224" height="140" rx="10" fill="#141a23" stroke="#d29922" stroke-width="1.4"/>
+<text x="1020" y="442" font-family="ui-sans-serif,system-ui,sans-serif" font-size="16" font-weight="700" fill="#e6edf3">journal + ledger</text>
+<text x="1020" y="468" font-family="ui-monospace,SFMono-Regular,Menlo,monospace" font-size="11.5" fill="#9aa7b8">agent-event, hashed input</text>
+<text x="1020" y="488" font-family="ui-monospace,SFMono-Regular,Menlo,monospace" font-size="11.5" fill="#9aa7b8">answers.ndjson</text>
+<text x="1020" y="508" font-family="ui-monospace,SFMono-Regular,Menlo,monospace" font-size="11.5" fill="#9aa7b8">outcomes.ndjson, later</text>
+<text x="1020" y="532" font-family="ui-monospace,SFMono-Regular,Menlo,monospace" font-size="11" fill="#d29922">a later truth is scored here</text>
+
+<text x="1252" y="702" text-anchor="end" font-family="ui-monospace,SFMono-Regular,Menlo,monospace" font-size="12" fill="#69788b">github.com/TAIPANBOX/typryx</text>
+</svg>

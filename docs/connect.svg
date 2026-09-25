@@ -1,0 +1,69 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1280" height="640" viewBox="0 0 1280 640" role="img" aria-label="Connect it: typryx connect claude-code, tokenfuse, and curl, each measured; stack launchers are planned">
+<defs>
+  <linearGradient id="bg" x1="0" y1="0" x2="0" y2="1">
+    <stop offset="0" stop-color="#0a0e16"/><stop offset="1" stop-color="#0d1117"/>
+  </linearGradient>
+  <linearGradient id="accent" x1="0" y1="0" x2="1" y2="0">
+    <stop offset="0" stop-color="#2dd4bf"/><stop offset="1" stop-color="#4493f8"/>
+  </linearGradient>
+  <pattern id="grid" width="32" height="32" patternUnits="userSpaceOnUse">
+    <path d="M 32 0 L 0 0 0 32" fill="none" stroke="#161b22" stroke-width="1"/>
+  </pattern>
+</defs>
+
+<rect width="1280" height="640" fill="url(#bg)"/>
+<rect width="1280" height="640" fill="url(#grid)" opacity="0.5"/>
+<rect width="1280" height="4" fill="url(#accent)"/>
+
+<text x="60" y="46" font-family="ui-sans-serif,system-ui,sans-serif" font-size="18" font-weight="700" fill="#e6edf3">Connect it</text>
+<text x="60" y="68" font-family="ui-sans-serif,system-ui,sans-serif" font-size="12.5" fill="#69788b">one command per client, and what it prints is what you paste</text>
+
+<!-- lane template, four rows -->
+<g font-family="ui-sans-serif,system-ui,sans-serif">
+  <!-- lane 1: claude-code -->
+  <text x="60" y="128" font-size="14" font-weight="700" fill="#e6edf3">Claude Code / any MCP client</text>
+  <rect x="60" y="140" width="640" height="36" rx="8" fill="#141a23" stroke="#283341"/>
+  <text x="76" y="163" font-family="ui-monospace,SFMono-Regular,Menlo,monospace" font-size="13" fill="#4493f8">typryx connect claude-code</text>
+  <line x1="700" y1="158" x2="756" y2="158" stroke="#283341" stroke-width="2"/>
+  <path d="M 756 158 l -11 -6 l 0 12 z" fill="#3fb950"/>
+  <circle cx="700" cy="158" r="4" fill="#3fb950"><animate attributeName="cx" values="700;756" dur="4s" repeatCount="indefinite"/><animate attributeName="opacity" values="0;1;1;0" keyTimes="0;0.12;0.85;1" dur="4s" repeatCount="indefinite"/></circle>
+  <rect x="770" y="138" width="420" height="40" rx="20" fill="#141a23" stroke="#3fb950" stroke-width="1.4"/>
+  <circle cx="794" cy="158" r="5" fill="#3fb950"/>
+  <text x="812" y="163" font-size="12.5" fill="#3fb950">measured 2026-09-25, Claude Code 2.1.270</text>
+
+  <!-- lane 2: tokenfuse -->
+  <text x="60" y="228" font-size="14" font-weight="700" fill="#e6edf3">tokenfuse MCP broker</text>
+  <rect x="60" y="240" width="640" height="36" rx="8" fill="#141a23" stroke="#283341"/>
+  <text x="76" y="263" font-family="ui-monospace,SFMono-Regular,Menlo,monospace" font-size="13" fill="#4493f8">typryx connect tokenfuse</text>
+  <line x1="700" y1="258" x2="756" y2="258" stroke="#283341" stroke-width="2"/>
+  <path d="M 756 258 l -11 -6 l 0 12 z" fill="#3fb950"/>
+  <circle cx="700" cy="258" r="4" fill="#3fb950"><animate attributeName="cx" values="700;756" dur="4s" begin="0.3s" repeatCount="indefinite"/><animate attributeName="opacity" values="0;1;1;0" keyTimes="0;0.12;0.85;1" dur="4s" begin="0.3s" repeatCount="indefinite"/></circle>
+  <rect x="770" y="238" width="300" height="40" rx="20" fill="#141a23" stroke="#3fb950" stroke-width="1.4"/>
+  <circle cx="794" cy="258" r="5" fill="#3fb950"/>
+  <text x="812" y="263" font-size="12.5" fill="#3fb950">measured 2026-09-25</text>
+
+  <!-- lane 3: curl -->
+  <text x="60" y="328" font-size="14" font-weight="700" fill="#e6edf3">Plain HTTP</text>
+  <rect x="60" y="340" width="640" height="36" rx="8" fill="#141a23" stroke="#283341"/>
+  <text x="76" y="363" font-family="ui-monospace,SFMono-Regular,Menlo,monospace" font-size="13" fill="#4493f8">typryx connect curl</text>
+  <line x1="700" y1="358" x2="756" y2="358" stroke="#283341" stroke-width="2"/>
+  <path d="M 756 358 l -11 -6 l 0 12 z" fill="#3fb950"/>
+  <circle cx="700" cy="358" r="4" fill="#3fb950"><animate attributeName="cx" values="700;756" dur="4s" begin="0.6s" repeatCount="indefinite"/><animate attributeName="opacity" values="0;1;1;0" keyTimes="0;0.12;0.85;1" dur="4s" begin="0.6s" repeatCount="indefinite"/></circle>
+  <rect x="770" y="338" width="200" height="40" rx="20" fill="#141a23" stroke="#3fb950" stroke-width="1.4"/>
+  <circle cx="794" cy="358" r="5" fill="#3fb950"/>
+  <text x="812" y="363" font-size="12.5" fill="#3fb950">measured</text>
+
+  <!-- lane 4: launchers -->
+  <text x="60" y="428" font-size="14" font-weight="700" fill="#9aa7b8">stack-single / stack-up / stack-k8s</text>
+  <rect x="60" y="440" width="640" height="36" rx="8" fill="#141a23" stroke="#283341" stroke-dasharray="6 5"/>
+  <text x="76" y="463" font-family="ui-monospace,SFMono-Regular,Menlo,monospace" font-size="13" fill="#69788b">no launcher entry yet</text>
+  <line x1="700" y1="458" x2="756" y2="458" stroke="#283341" stroke-width="2" stroke-dasharray="4 4"/>
+  <rect x="770" y="438" width="160" height="40" rx="20" fill="#141a23" stroke="#69788b" stroke-width="1.4"/>
+  <circle cx="794" cy="458" r="5" fill="#69788b"/>
+  <text x="812" y="463" font-size="12.5" fill="#9aa7b8">planned</text>
+</g>
+
+<line x1="60" y1="540" x2="1220" y2="540" stroke="#222b38"/>
+<text x="60" y="570" font-family="ui-sans-serif,system-ui,sans-serif" font-size="12.5" fill="#69788b">Every command's output is a golden-output test; none of them can print a real key.</text>
+<text x="60" y="592" font-family="ui-sans-serif,system-ui,sans-serif" font-size="12.5" fill="#69788b">Before 2026-09-25 Claude Code silently dropped the tool list over a schema defect our own tests missed; a real client found it.</text>
+</svg>

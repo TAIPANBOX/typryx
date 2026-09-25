@@ -1,0 +1,72 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1280" height="340" viewBox="0 0 1280 340" role="img" aria-label="typryx: typed answers with a probability, for an agent stack that has to show its work">
+<defs>
+  <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+    <stop offset="0" stop-color="#0a0e16"/><stop offset="0.55" stop-color="#0d1117"/><stop offset="1" stop-color="#101826"/>
+  </linearGradient>
+  <linearGradient id="wordmark" x1="0" y1="0" x2="1" y2="0">
+    <stop offset="0" stop-color="#2dd4bf"/><stop offset="0.55" stop-color="#4493f8"/><stop offset="1" stop-color="#8b7cf6"/>
+  </linearGradient>
+  <linearGradient id="accent" x1="0" y1="0" x2="1" y2="0">
+    <stop offset="0" stop-color="#2dd4bf"/><stop offset="1" stop-color="#4493f8"/>
+  </linearGradient>
+  <pattern id="grid" width="32" height="32" patternUnits="userSpaceOnUse">
+    <path d="M 32 0 L 0 0 0 32" fill="none" stroke="#161b22" stroke-width="1"/>
+  </pattern>
+  <radialGradient id="halo" cx="0.2" cy="0.4" r="0.6">
+    <stop offset="0" stop-color="#2dd4bf" stop-opacity="0.14"/><stop offset="1" stop-color="#2dd4bf" stop-opacity="0"/>
+  </radialGradient>
+</defs>
+
+<rect width="1280" height="340" fill="url(#bg)"/>
+<rect width="1280" height="340" fill="url(#grid)" opacity="0.6"/>
+<rect width="1280" height="340" fill="url(#halo)"/>
+<rect width="1280" height="4" fill="url(#accent)"/>
+
+<text x="64" y="112" font-family="ui-sans-serif,system-ui,Segoe UI,Roboto,sans-serif" font-size="60" font-weight="700" letter-spacing="-1.2" fill="url(#wordmark)">typryx</text>
+
+<text x="66" y="152" font-family="ui-sans-serif,system-ui,sans-serif" font-size="17" fill="#e6edf3">Typed answers with a <tspan font-weight="600" fill="#2dd4bf">probability</tspan>, for an agent stack that has to show its work.</text>
+<text x="66" y="177" font-family="ui-sans-serif,system-ui,sans-serif" font-size="13.5" fill="#9aa7b8">An optional add-on: a question in, a choice, a score or a yes/no out, with every answer on the record.</text>
+
+<!-- three facts -->
+<g transform="translate(64,206)" font-family="ui-sans-serif,system-ui,sans-serif">
+  <rect x="0" y="0" width="292" height="70" rx="10" fill="#141a23" stroke="#1b2331"/>
+  <text x="18" y="26" font-size="10.5" letter-spacing="0.6" fill="#69788b">ANSWERS</text>
+  <text x="18" y="50" font-size="14" font-weight="600" fill="#e6edf3">a probability, never a guess</text>
+
+  <rect x="308" y="0" width="292" height="70" rx="10" fill="#141a23" stroke="#1b2331"/>
+  <text x="326" y="26" font-size="10.5" letter-spacing="0.6" fill="#69788b">LEAVES THE BOX</text>
+  <text x="326" y="50" font-size="14" font-weight="600" fill="#e6edf3">only named fields</text>
+
+  <rect x="616" y="0" width="292" height="70" rx="10" fill="#141a23" stroke="#1b2331"/>
+  <text x="634" y="26" font-size="10.5" letter-spacing="0.6" fill="#69788b">RECORDED</text>
+  <text x="634" y="50" font-size="14" font-weight="600" fill="#e6edf3">every answer, hashed input</text>
+</g>
+
+<!-- small visual: probability bars, echoing the measured stub example -->
+<g transform="translate(992,60)">
+  <rect x="0" y="-16" width="248" height="232" rx="12" fill="#141a23" stroke="#1b2331"/>
+  <text x="124" y="16" text-anchor="middle" font-family="ui-sans-serif,system-ui,sans-serif" font-size="11" letter-spacing="0.4" fill="#69788b">request.complexity</text>
+  <g font-family="ui-monospace,SFMono-Regular,Menlo,monospace" font-size="10.5">
+    <rect x="11" y="30" width="46" height="110" rx="3" fill="#283341"/>
+    <rect x="11" y="107" width="46" height="33" rx="3" fill="#2dd4bf"><animate attributeName="opacity" values="0.75;1;0.75" dur="4s" repeatCount="indefinite"/></rect>
+    <text x="34" y="154" text-anchor="middle" fill="#9aa7b8">cheap</text>
+    <text x="34" y="168" text-anchor="middle" fill="#69788b">.33</text>
+
+    <rect x="71" y="30" width="46" height="110" rx="3" fill="#283341"/>
+    <rect x="71" y="105" width="46" height="35" rx="3" fill="#4493f8"><animate attributeName="opacity" values="1;0.7;1" dur="4s" repeatCount="indefinite"/></rect>
+    <text x="94" y="154" text-anchor="middle" fill="#e6edf3">default</text>
+    <text x="94" y="168" text-anchor="middle" fill="#9aa7b8">.35</text>
+
+    <rect x="131" y="30" width="46" height="110" rx="3" fill="#283341"/>
+    <rect x="131" y="121" width="46" height="19" rx="3" fill="#8b7cf6"/>
+    <text x="154" y="154" text-anchor="middle" fill="#9aa7b8">hard</text>
+    <text x="154" y="168" text-anchor="middle" fill="#69788b">.19</text>
+
+    <rect x="191" y="30" width="46" height="110" rx="3" fill="#283341"/>
+    <rect x="191" y="126" width="46" height="14" rx="3" fill="#8b7cf6" opacity="0.6"/>
+    <text x="214" y="154" text-anchor="middle" fill="#9aa7b8">reas</text>
+    <text x="214" y="168" text-anchor="middle" fill="#69788b">.14</text>
+  </g>
+  <text x="124" y="200" text-anchor="middle" font-family="ui-sans-serif,system-ui,sans-serif" font-size="10.5" fill="#69788b">stub backend, measured</text>
+</g>
+</svg>

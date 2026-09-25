@@ -1,0 +1,80 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1280" height="560" viewBox="0 0 1280 560" role="img" aria-label="Measured probabilities for request.complexity from the stub backend: cheap 0.333, default 0.346, hard 0.185, reasoning 0.136, the highest bar wins; a backend's own claimed answer is ignored, and no usable probabilities means unanswered with a reason, never a number">
+<defs>
+  <linearGradient id="bg" x1="0" y1="0" x2="0" y2="1">
+    <stop offset="0" stop-color="#0a0e16"/><stop offset="1" stop-color="#0d1117"/>
+  </linearGradient>
+  <linearGradient id="accent" x1="0" y1="0" x2="1" y2="0">
+    <stop offset="0" stop-color="#2dd4bf"/><stop offset="1" stop-color="#4493f8"/>
+  </linearGradient>
+  <pattern id="grid" width="32" height="32" patternUnits="userSpaceOnUse">
+    <path d="M 32 0 L 0 0 0 32" fill="none" stroke="#161b22" stroke-width="1"/>
+  </pattern>
+</defs>
+
+<rect width="1280" height="560" fill="url(#bg)"/>
+<rect width="1280" height="560" fill="url(#grid)" opacity="0.5"/>
+<rect width="1280" height="4" fill="url(#accent)"/>
+
+<text x="60" y="36" font-family="ui-sans-serif,system-ui,sans-serif" font-size="16" font-weight="700" fill="#e6edf3">How an answer is made</text>
+<text x="60" y="56" font-family="ui-sans-serif,system-ui,sans-serif" font-size="12" fill="#69788b">request.complexity, stub backend, measured 2026-09-25</text>
+
+<!-- bar chart: track top y=120, baseline y=380 -->
+<g font-family="ui-monospace,SFMono-Regular,Menlo,monospace">
+  <line x1="60" y1="380" x2="700" y2="380" stroke="#283341" stroke-width="1.5"/>
+
+  <rect x="100" y="120" width="120" height="260" rx="6" fill="#1b2331"/>
+  <rect x="100" y="294" width="120" height="86" rx="6" fill="#4493f8" opacity="0.55"/>
+  <text x="160" y="280" text-anchor="middle" font-size="15" font-weight="700" fill="#e6edf3">0.333</text>
+  <text x="160" y="402" text-anchor="middle" font-size="13" fill="#9aa7b8">cheap</text>
+
+  <rect x="272" y="90" width="96" height="20" rx="10" fill="#0d1117" stroke="#2dd4bf"/>
+  <text x="320" y="104" text-anchor="middle" font-size="10" fill="#2dd4bf">the answer</text>
+  <rect x="260" y="120" width="120" height="260" rx="6" fill="#1b2331" stroke="#2dd4bf" stroke-width="2"/>
+  <rect x="260" y="291" width="120" height="89" rx="6" fill="#2dd4bf"/>
+  <text x="320" y="277" text-anchor="middle" font-size="17" font-weight="700" fill="#2dd4bf">0.346</text>
+  <text x="320" y="402" text-anchor="middle" font-size="13" font-weight="700" fill="#e6edf3">default</text>
+
+  <rect x="420" y="120" width="120" height="260" rx="6" fill="#1b2331"/>
+  <rect x="420" y="332" width="120" height="48" rx="6" fill="#8b7cf6" opacity="0.55"/>
+  <text x="480" y="318" text-anchor="middle" font-size="15" font-weight="700" fill="#e6edf3">0.185</text>
+  <text x="480" y="402" text-anchor="middle" font-size="13" fill="#9aa7b8">hard</text>
+
+  <rect x="580" y="120" width="120" height="260" rx="6" fill="#1b2331"/>
+  <rect x="580" y="345" width="120" height="35" rx="6" fill="#8b7cf6" opacity="0.4"/>
+  <text x="640" y="331" text-anchor="middle" font-size="15" font-weight="700" fill="#e6edf3">0.136</text>
+  <text x="640" y="402" text-anchor="middle" font-size="13" fill="#9aa7b8">reasoning</text>
+</g>
+<text x="380" y="430" text-anchor="middle" font-family="ui-sans-serif,system-ui,sans-serif" font-size="12" fill="#69788b">probabilities sum to 1; the highest bar is served as the answer</text>
+
+<!-- side panel -->
+<rect x="760" y="80" width="450" height="220" rx="10" fill="#141a23" stroke="#283341" stroke-width="1.4"/>
+<text x="784" y="110" font-family="ui-sans-serif,system-ui,sans-serif" font-size="14" font-weight="700" fill="#e6edf3">The claim is not the answer</text>
+<text x="784" y="137" font-family="ui-sans-serif,system-ui,sans-serif" font-size="12.5" fill="#9aa7b8">A backend that says</text>
+<text x="951" y="137" font-family="ui-monospace,SFMono-Regular,Menlo,monospace" font-size="12.5" fill="#f85149">"banana"</text>
+<text x="784" y="158" font-family="ui-sans-serif,system-ui,sans-serif" font-size="12.5" fill="#9aa7b8">outright is ignored: the answer is derived</text>
+<text x="784" y="179" font-family="ui-sans-serif,system-ui,sans-serif" font-size="12.5" fill="#9aa7b8">from the probability distribution itself,</text>
+<text x="784" y="200" font-family="ui-sans-serif,system-ui,sans-serif" font-size="12.5" fill="#9aa7b8">never read from the backend's own</text>
+<text x="784" y="221" font-family="ui-sans-serif,system-ui,sans-serif" font-size="12.5" fill="#9aa7b8">Choice, Score or Yes fields.</text>
+<rect x="784" y="240" width="402" height="42" rx="8" fill="#0d1117" stroke="#2dd4bf" stroke-width="1.2"/>
+<text x="800" y="266" font-family="ui-monospace,SFMono-Regular,Menlo,monospace" font-size="11.5" fill="#2dd4bf">argmax(probabilities), never backend.Answer</text>
+
+<!-- bottom strip: unanswered reasons -->
+<line x1="60" y1="440" x2="1220" y2="440" stroke="#222b38"/>
+<text x="60" y="466" font-family="ui-sans-serif,system-ui,sans-serif" font-size="13.5" fill="#e6edf3">No usable probabilities: <tspan font-weight="700" fill="#f85149">unanswered</tspan>, with a reason, and no number at all.</text>
+<g font-family="ui-monospace,SFMono-Regular,Menlo,monospace" font-size="12">
+  <rect x="60" y="480" width="140" height="26" rx="13" fill="#141a23" stroke="#f85149"/>
+  <text x="130" y="498" text-anchor="middle" fill="#f85149">backend_error</text>
+
+  <rect x="212" y="480" width="100" height="26" rx="13" fill="#141a23" stroke="#f85149"/>
+  <text x="262" y="498" text-anchor="middle" fill="#f85149">timeout</text>
+
+  <rect x="324" y="480" width="100" height="26" rx="13" fill="#141a23" stroke="#f85149"/>
+  <text x="374" y="498" text-anchor="middle" fill="#f85149">canceled</text>
+
+  <rect x="436" y="480" width="150" height="26" rx="13" fill="#141a23" stroke="#f85149"/>
+  <text x="511" y="498" text-anchor="middle" fill="#f85149">no_probabilities</text>
+
+  <rect x="598" y="480" width="164" height="26" rx="13" fill="#141a23" stroke="#f85149"/>
+  <text x="680" y="498" text-anchor="middle" fill="#f85149">bad_probabilities</text>
+</g>
+</svg>
