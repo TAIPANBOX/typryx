@@ -1,0 +1,4 @@
+/typryx
+*.ndjson
+.DS_Store
+cover.out
