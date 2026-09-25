@@ -49,6 +49,7 @@ go build ./...
 ./scripts/readme-numbers.sh
 ./scripts/one-way-out.sh
 ./scripts/no-secrets.sh
+./scripts/templates-load.sh
 ./scripts/gates-have-teeth.sh   # needs a clean tree, run it after committing
 gosec -quiet ./...              # v2.29.0, as CI; silent when clean
 govulncheck ./...               # v1.7.0, as CI
@@ -326,6 +327,25 @@ in the plan.
     which is what "unpriced" means here rather than a guessed number.
     *(test: `TestCostIsInputTokensTimesTheConfiguredPrice`,
     `TestCostIsZeroWhenNoPriceIsConfigured`, both in `internal/backend`)*
+
+28. **The starter catalog ships the minimum.** Every template in
+    `examples/templates` (the directory the Dockerfile also copies to
+    `/etc/typryx/templates`) loads clean, the directory is never missing or
+    empty, and no template's `fields` names one of a short denylist of
+    identifying field names (`email`, `user_email`, `name`, `phone`, `iban`,
+    `card`, `api_key`, `token`, `password`, `ssn`, `address`). *(gate:
+    `scripts/templates-load.sh`, teeth in `scripts/gates-have-teeth.sh`;
+    test: `TestEveryStarterTemplateLoads`, `TestNoStarterTemplateNamesAnIdentifyingField`,
+    both in `internal/template`)*
+
+@decided 2026-09-25: typryx is offered in three data modes: without it (the
+stack runs exactly as before), with a local model (`openai-logprobs` against
+a model server in the customer's own infrastructure, nothing leaves it), and
+with a hosted model (`openai-logprobs` against a hosted endpoint, or `jev`;
+only the fields a template names leave, to a named third-party processor
+under its own terms). Choosing a hosted backend is the customer's own
+explicit decision to send those named fields to that named processor, never
+a default. See README's "Where your data goes".
 
 ### Not built yet
 

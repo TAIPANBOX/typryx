@@ -43,6 +43,8 @@ jobs:
         run: ./scripts/one-way-out.sh
       - name: no real secret in the tree or its history
         run: ./scripts/no-secrets.sh
+      - name: the starter catalog loads and ships the minimum
+        run: ./scripts/templates-load.sh
       - name: the gates have teeth
         run: ./scripts/gates-have-teeth.sh
 

@@ -1,0 +1,14 @@
+{
+  "id": "triage.anomaly_class",
+  "type": "choice",
+  "instructions": "Classify the cause of the cost or usage anomaly described in `anomaly`, using `recent_changes` as context.",
+  "criteria": {
+    "expected_growth": "matches ordinary, already-expected growth in traffic or usage",
+    "runaway_agent": "an agent or job is looping, retrying, or running away with no matching growth in real usage",
+    "misconfiguration": "a config, quota, or deployment setting is set wrong, with no code or usage change behind it",
+    "price_change": "usage is flat but the unit price or billing terms changed",
+    "unknown": "none of the above fits, or there is not enough information to tell"
+  },
+  "fields": ["anomaly", "recent_changes"],
+  "max_state_bytes": 16384
+}
