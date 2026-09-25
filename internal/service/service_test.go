@@ -372,13 +372,19 @@ func TestAnOutcomeIsScoredAgainstTheVersionItWasAskedUnder(t *testing.T) {
 	}
 
 	// The template changes: same id, different instructions, so a different
-	// registry now reports a different version. The service under test is
-	// never told about this new registry (Outcome must not consult it).
+	// registry now reports a different version. The service's own Templates
+	// registry is REPLACED with one holding the new version, in place, so
+	// that if Outcome ever consulted the live registry instead of the
+	// ledger's own record of what the answer was given under, this test
+	// would actually observe it report v2. Leaving the old registry in
+	// place (as a first draft of this test did) would let that mistake
+	// through silently, because both would then agree on v1 by accident.
 	tmplV2 := tmplV1
 	tmplV2.Instructions = "a completely different question now"
 	if tmplV2.Version() == v1 {
 		t.Fatal("test setup bug: the changed template must produce a different version")
 	}
+	d.Service.Templates = loadOneTemplate(t, tmplV2)
 
 	outcome, refusal := d.Service.Outcome(service.Caller{AgentID: "agent://acme.example/bot"},
 		service.OutcomeRequest{AnswerID: result.AnswerID, Truth: json.RawMessage(`true`), Source: "human"})
