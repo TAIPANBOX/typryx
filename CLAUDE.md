@@ -338,6 +338,18 @@ in the plan.
     test: `TestEveryStarterTemplateLoads`, `TestNoStarterTemplateNamesAnIdentifyingField`,
     both in `internal/template`)*
 
+34. **A backend server's refusal is told apart from its failure, by its
+    machine code, never by its message.** A 4xx answer is logged as "server
+    refused the call" and a 5xx as "server failed the call", with the status
+    and, when the body is `{"error":{"type"|"code":"..."}}` holding only
+    lowercase letters, digits and underscores (at most 64 bytes), that code as
+    `error_type`: enough to read a tokenfuse gateway's `metering_required` in
+    typryx's own log. The message text, which may echo what was sent, never
+    reaches the log or the caller. *(test:
+    `TestARefusalIsLoggedWithItsMachineCodeNeverItsMessage`,
+    `TestAJevRefusalIsLoggedWithItsMachineCodeNeverItsMessage`, both in
+    `internal/backend`; mutants M34-1 to M34-5, each caught)*
+
 @decided 2026-09-25: tokenfuse is not changed for typryx. It runs exactly as it
 does without typryx, and typryx joins it through the MCP broker's named-upstream
 configuration alone; the agent behind a brokered call stays on tokenfuse's own

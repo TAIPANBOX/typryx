@@ -702,3 +702,61 @@ func TestTheLetterTableHasOneLabelPerAllowedOption(t *testing.T) {
 		t.Fatalf("labels run A..Z, got %q..%q", letterFor(0), letterFor(maxLetterLabels-1))
 	}
 }
+
+// --- TestARefusalIsLoggedWithItsMachineCodeNeverItsMessage -----------------
+
+// A tokenfuse gateway in front of the model server refuses an unmetered call
+// with 400 {"error":{"type":"metering_required",...}}. The operator must be
+// able to read that it was a refusal and which one, from typryx's own log,
+// without the message text (which may echo anything) ever reaching it.
+func TestARefusalIsLoggedWithItsMachineCodeNeverItsMessage(t *testing.T) {
+	const marker = "ECHOED-INPUT-MARKER-5150"
+	cases := []struct {
+		name     string
+		status   int
+		body     string
+		wantLine string
+		wantType string
+	}{
+		{"tokenfuse metering refusal", 400,
+			`{"error":{"reason":"` + marker + `","retryable":false,"type":"metering_required"}}`,
+			"server refused the call", "metering_required"},
+		{"openai-style code without type", 401,
+			`{"error":{"message":"` + marker + `","code":"invalid_api_key"}}`,
+			"server refused the call", "invalid_api_key"},
+		{"a type that is not a machine code is dropped", 422,
+			`{"error":{"type":"` + marker + ` Bad Input!"}}`,
+			"server refused the call", ""},
+		{"not JSON at all", 403, marker, "server refused the call", ""},
+		{"a failure stays a failure", 502,
+			`{"error":{"type":"upstream_down","message":"` + marker + `"}}`,
+			"server failed the call", "upstream_down"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			srv := newJSONServer(t, tc.status, nil, []byte(tc.body))
+			var logBuf bytes.Buffer
+			o := newBackend(t, srv.URL, "", testLogger(&logBuf))
+			_, _, err := o.Ask(context.Background(), noulQuestion("", ""), template.Egress{})
+			if err == nil {
+				t.Fatalf("expected an error for a %d response", tc.status)
+			}
+			logged := logBuf.String()
+			if !strings.Contains(logged, tc.wantLine) {
+				t.Errorf("log line should say %q, got %q", tc.wantLine, logged)
+			}
+			if !strings.Contains(logged, "status="+strconv.Itoa(tc.status)) {
+				t.Errorf("log line should carry the status, got %q", logged)
+			}
+			if tc.wantType != "" && !strings.Contains(logged, "error_type="+tc.wantType) {
+				t.Errorf("log line should carry error_type=%s, got %q", tc.wantType, logged)
+			}
+			if tc.wantType == "" && strings.Contains(logged, "error_type") {
+				t.Errorf("no machine code was present, so none may be logged, got %q", logged)
+			}
+			if strings.Contains(logged, marker) || strings.Contains(err.Error(), marker) {
+				t.Errorf("the body's text reached the log or the caller: log %q, err %v", logged, err)
+			}
+		})
+	}
+}

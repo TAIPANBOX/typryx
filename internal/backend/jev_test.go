@@ -1,9 +1,11 @@
 package backend
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"math"
 	"math/rand"
 	"net/http"
@@ -819,5 +821,27 @@ func TestAMissingNoulIsUnansweredNotACertainNo(t *testing.T) {
 				t.Fatalf("expected UnansweredError{no_probabilities}, got err=%v probabilities=%v", err, ans.Probabilities)
 			}
 		})
+	}
+}
+
+func TestAJevRefusalIsLoggedWithItsMachineCodeNeverItsMessage(t *testing.T) {
+	const marker = "ECHOED-INPUT-MARKER-6160"
+	srv := newJevServer(t, jevResponseFixture{Status: 422,
+		Body: []byte(`{"error":{"type":"invalid_request","message":"` + marker + `"}}`)})
+	var logBuf bytes.Buffer
+	j := NewJev(JevConfig{BaseURL: srv.URL, Model: "jev-latest", APIKey: "k",
+		Logger: slog.New(slog.NewTextHandler(&logBuf, nil))})
+	_, _, err := j.Ask(context.Background(), noulQ(false, "", ""), template.Egress{})
+	if err == nil {
+		t.Fatal("expected an error for a 422")
+	}
+	logged := logBuf.String()
+	for _, want := range []string{"server refused the call", "status=422", "error_type=invalid_request"} {
+		if !strings.Contains(logged, want) {
+			t.Errorf("log should contain %q, got %q", want, logged)
+		}
+	}
+	if strings.Contains(logged, marker) || strings.Contains(err.Error(), marker) {
+		t.Errorf("the body's text reached the log or the caller: log %q, err %v", logged, err)
 	}
 }

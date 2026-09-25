@@ -167,9 +167,9 @@ func (o *OpenAI) Ask(ctx context.Context, q Question, eg template.Egress) (Answe
 	if resp.StatusCode >= 400 {
 		// The body is deliberately never included in the returned error: it
 		// may carry anything the server wants to say, and the caller must
-		// never see it. The status is the one fact worth an operator's log
-		// line.
-		o.cfg.Logger.Warn("openai-logprobs: server error", "status", resp.StatusCode)
+		// never see it. The operator's line carries the status and, at most,
+		// the server's machine code (logHTTPFailure), never its message.
+		logHTTPFailure(o.cfg.Logger, "openai-logprobs", resp.StatusCode, body)
 		return Answer{}, Usage{}, fmt.Errorf("openai-logprobs: server responded with status %d", resp.StatusCode)
 	}
 	if readErr != nil {

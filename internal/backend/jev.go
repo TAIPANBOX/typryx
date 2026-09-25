@@ -222,11 +222,11 @@ func (j *Jev) tryOnce(ctx context.Context, reqJSON []byte, qType template.Type) 
 		return Answer{}, Usage{}, &jevRetryableError{status: resp.StatusCode, retryAfter: resp.Header.Get("Retry-After")}
 	}
 	if resp.StatusCode >= 400 {
-		// The body is deliberately never included in the returned error or
-		// the log: it may carry anything the server wants to say (401
-		// invalid key, 422 validation failure), and neither the caller nor
-		// the log line needs more than the status to act on.
-		j.cfg.Logger.Warn("jev: server error", "status", resp.StatusCode)
+		// The body is deliberately never included in the returned error: it
+		// may carry anything the server wants to say (401 invalid key, 422
+		// validation failure). The operator's line carries the status and, at
+		// most, the server's machine code (logHTTPFailure), never its message.
+		logHTTPFailure(j.cfg.Logger, "jev", resp.StatusCode, body)
 		return Answer{}, Usage{}, fmt.Errorf("jev: server responded with status %d", resp.StatusCode)
 	}
 	if readErr != nil {
