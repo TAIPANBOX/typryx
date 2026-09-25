@@ -4,14 +4,29 @@
 // The door (internal/door) runs before the body is parsed, on every route
 // but /healthz, and identity comes only from the credential it resolves,
 // never from a header the caller sent: X-Fuse-Agent-Id, X-Agent-Id and
-// Agent-Passport are read by nothing here.
+// Agent-Passport are read by nothing here. /v1/ask, /v1/outcome and
+// /v1/templates never accept a key from the body, only from X-Typryx-Key,
+// whatever AcceptKeyInMeta says: that flag names one JSON-RPC field of one
+// method on /mcp alone, nothing on the /v1/* wire shape.
+//
+// This package imports internal/mcp for two pure functions
+// (NeedsNoCredential, ExtractMetaKey) that read the JSON-RPC envelope
+// TYPRYX_ACCEPT_KEY_IN_META needs to decide, before the door, whether a
+// /mcp request needs a credential at all and where a "tools/call" may carry
+// one; that import does not reintroduce the cycle MCPHandler exists to
+// avoid, since internal/mcp still never imports this package, and
+// dispatching the call itself still goes through that interface, never a
+// direct call into internal/mcp.Server.
 package api
 
 import (
+	"bytes"
 	"encoding/json"
+	"io"
 	"net/http"
 
 	"github.com/TAIPANBOX/typryx/internal/door"
+	"github.com/TAIPANBOX/typryx/internal/mcp"
 	"github.com/TAIPANBOX/typryx/internal/service"
 	"github.com/TAIPANBOX/typryx/internal/template"
 )
@@ -31,6 +46,10 @@ type Server struct {
 	Keys    door.Keys
 	Service *service.Service
 	MCP     MCPHandler
+
+	// AcceptKeyInMeta is TYPRYX_ACCEPT_KEY_IN_META (door.TruthyEnv), off by
+	// default. On, it changes /mcp alone: see handleMCPRoute.
+	AcceptKeyInMeta bool
 }
 
 // NewMux builds the route table.
@@ -40,7 +59,7 @@ func NewMux(s *Server) *http.ServeMux {
 	mux.HandleFunc("/v1/ask", s.withDoor(s.handleAsk))
 	mux.HandleFunc("/v1/outcome", s.withDoor(s.handleOutcome))
 	mux.HandleFunc("/v1/templates", s.withDoor(s.handleTemplates))
-	mux.HandleFunc("/mcp", s.withDoor(s.handleMCP))
+	mux.HandleFunc("/mcp", s.handleMCPRoute)
 	return mux
 }
 
@@ -179,6 +198,67 @@ func (s *Server) handleTemplates(w http.ResponseWriter, r *http.Request, _ strin
 
 func (s *Server) handleMCP(w http.ResponseWriter, r *http.Request, agentID string) {
 	s.MCP.ServeMCP(w, r, agentID)
+}
+
+// handleMCPRoute is /mcp's own door. With AcceptKeyInMeta off, or for
+// anything but POST, it is exactly withDoor(handleMCP): a credential in
+// X-Typryx-Key, or a 401 shaped exactly like every other route's.
+//
+// With AcceptKeyInMeta on and a POST, the body has to be read before the
+// door can be answered, because the decision itself depends on the JSON-RPC
+// message inside it:
+//
+//   - "initialize", "tools/list", and a JSON-RPC notification need no
+//     credential at all (mcp.NeedsNoCredential): none of them reach a
+//     backend or name an agent, so nothing here is worth protecting.
+//   - a "tools/call" with no X-Typryx-Key header may instead carry its
+//     credential at params._meta["typryx/key"] (mcp.ExtractMetaKey),
+//     resolved to an identity through the exact same door.Keys path a
+//     header goes through; a header, when present, is always the one used.
+//   - every other message (including one this cannot even parse) still
+//     needs the header: fail closed.
+//
+// The _meta entry is stripped from the body unconditionally, whether or not
+// it ends up used, before internal/mcp.Server (or anything it can reach: a
+// log line, the journal, the ledger, an error message, a response) ever
+// parses it.
+func (s *Server) handleMCPRoute(w http.ResponseWriter, r *http.Request) {
+	if !s.AcceptKeyInMeta || r.Method != http.MethodPost {
+		s.withDoor(s.handleMCP)(w, r)
+		return
+	}
+
+	body, err := io.ReadAll(http.MaxBytesReader(w, r.Body, MaxBodyBytes))
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "bad_request", "could not read the request body: "+err.Error())
+		return
+	}
+
+	// Strip first, decide second: a message this turns out not to need a
+	// credential for, or that carries a header instead, must not forward an
+	// unused _meta credential downstream either.
+	metaKey, strippedBody, hadMeta := mcp.ExtractMetaKey(body)
+	if hadMeta {
+		body = strippedBody
+	}
+
+	if mcp.NeedsNoCredential(body) {
+		r.Body = io.NopCloser(bytes.NewReader(body))
+		s.handleMCP(w, r, "")
+		return
+	}
+
+	key := r.Header.Get(door.KeyHeader)
+	if key == "" {
+		key = metaKey
+	}
+	if !s.Keys.Allow(key) {
+		writeError(w, http.StatusUnauthorized, "unauthorized", "a client credential is required in "+door.KeyHeader)
+		return
+	}
+	agentID := s.Keys.Identity(key)
+	r.Body = io.NopCloser(bytes.NewReader(body))
+	s.handleMCP(w, r, agentID)
 }
 
 func writeJSON(w http.ResponseWriter, status int, v any) {

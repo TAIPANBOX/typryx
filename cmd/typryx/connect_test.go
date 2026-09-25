@@ -38,12 +38,25 @@ TOKENFUSE_MCP_UPSTREAMS=typryx=http://127.0.0.1:4320/mcp
 # a caller picks it with:
 X-Fuse-Mcp-Upstream: typryx
 
-# measured limitation (2026-09-25): the broker forwards to a named upstream
-# with only a content-type header, no credential and no agent identity
-# (tokenfuse crates/gateway/src/mcpbroker.rs). typryx cannot name the agent
-# behind the broker, so its journal skips that call and counts it
-# (skipped_no_agent at GET /healthz). Run typryx on loopback or a private
-# network with no TYPRYX_KEYS set while it sits behind this broker.
+# the broker forwards a brokered call with only a content-type header: no
+# credential, no agent identity (tokenfuse crates/gateway/src/mcpbroker.rs).
+# On tools/call it does resolve {{secret:NAME}} handles anywhere inside
+# params, _meta included, from its own vault, before forwarding:
+TOKENFUSE_MCP_SECRETS=typryx_key=${TYPRYX_KEY}
+TOKENFUSE_MCP_SECRET_SCOPES=typryx_key=agents:agent://demo.example/support-bot
+
+# typryx opts in to reading that credential from a tools/call's own
+# params._meta, since the broker sends no header of its own:
+TYPRYX_ACCEPT_KEY_IN_META=1
+
+# a client-side tools/call then carries the handle, never a real key:
+{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"ask","arguments":{"template":"eval.outcome_met","state":{"task":"..."}},"_meta":{"typryx/key":"{{secret:typryx_key}}"}}}
+
+# with TYPRYX_ACCEPT_KEY_IN_META=1, initialize and tools/list need no
+# credential (tool schemas only); ask, ask_freeform and list_questions still
+# do, from the X-Typryx-Key header or params._meta. Without the flag every
+# /mcp call needs the header, as before. tokenfuse itself is unchanged: typryx joins it
+# through configuration alone.
 
 # the OTHER direction: typryx's own spend, visible to a tokenfuse gateway's
 # budget. tokenfuse is not changed for this; typryx joins it by pointing the

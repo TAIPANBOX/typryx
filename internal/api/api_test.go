@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
 	"io"
 	"math/rand"
 	"net/http"
@@ -28,6 +29,288 @@ type noopMCP struct{ called bool }
 func (n *noopMCP) ServeMCP(w http.ResponseWriter, r *http.Request, agentID string) {
 	n.called = true
 	w.WriteHeader(http.StatusOK)
+}
+
+// capturingMCP is a test double that records exactly what handleMCPRoute
+// decided and handed down: the agent identity it resolved, and the raw
+// bytes of the body it forwarded. It never dispatches a real tool call, so
+// these tests are about the door's own decision (credential source,
+// precedence, stripping), not about internal/mcp.Server's JSON-RPC
+// semantics, which mcp_test.go already covers end to end.
+type capturingMCP struct {
+	agentID string
+	body    []byte
+}
+
+func (c *capturingMCP) ServeMCP(w http.ResponseWriter, r *http.Request, agentID string) {
+	c.agentID = agentID
+	b, _ := io.ReadAll(r.Body)
+	c.body = b
+	w.WriteHeader(http.StatusOK)
+}
+
+// newMetaTestServer builds an api.Server with the given keys and
+// AcceptKeyInMeta setting, and returns it alongside the fake it captures
+// into. The service carries a disabled journal (never nil: record.Open("")
+// still needs to be called for that) so that a door-decision test which
+// reaches all the way into internal/service, whether by design or by a
+// planted mutant that wrongly lets a call through, fails on its own
+// assertion rather than on a nil-pointer panic that would obscure it.
+func newMetaTestServer(keys door.Keys, acceptKeyInMeta bool) (*httptest.Server, *capturingMCP) {
+	fake := &capturingMCP{}
+	svc := service.New()
+	j, _ := record.Open("")
+	svc.Journal = j
+	srv := &api.Server{Keys: keys, Service: svc, MCP: fake, AcceptKeyInMeta: acceptKeyInMeta}
+	ts := httptest.NewServer(api.NewMux(srv))
+	return ts, fake
+}
+
+func postMCP(t *testing.T, ts *httptest.Server, headerKey, body string) *http.Response {
+	t.Helper()
+	req, err := http.NewRequest(http.MethodPost, ts.URL+"/mcp", bytes.NewReader([]byte(body)))
+	if err != nil {
+		t.Fatalf("building request: %v", err)
+	}
+	if headerKey != "" {
+		req.Header.Set(door.KeyHeader, headerKey)
+	}
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("request: %v", err)
+	}
+	return resp
+}
+
+const toolsCallWithMeta = `{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"ask","arguments":{"template":"t","state":{}},"_meta":{"typryx/key":"%s"}}}`
+
+// @test:TestAcceptKeyInMetaOffKeepsTodaysBehavior
+//
+// Mutant: "_meta key accepted with the flag off". With AcceptKeyInMeta
+// false (the default), a tools/call carrying a valid credential only in
+// params._meta, with no header, must be refused exactly as it always was:
+// the meta path must never even be consulted.
+func TestAcceptKeyInMetaOffKeepsTodaysBehavior(t *testing.T) {
+	ts, fake := newMetaTestServer(door.ParseKeys("k1=agent://acme.example/bot"), false)
+	defer ts.Close()
+
+	resp := postMCP(t, ts, "", fmt.Sprintf(toolsCallWithMeta, "k1"))
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusUnauthorized {
+		body, _ := io.ReadAll(resp.Body)
+		t.Fatalf("expected 401 with the flag off and no header, got %d: %s", resp.StatusCode, body)
+	}
+	if fake.agentID != "" || fake.body != nil {
+		t.Errorf("the MCP handler must never have been reached, got agentID=%q body=%s", fake.agentID, fake.body)
+	}
+
+	// initialize/tools/list must still need the header too, with the flag off.
+	resp2 := postMCP(t, ts, "", `{"jsonrpc":"2.0","id":1,"method":"initialize","params":{}}`)
+	defer resp2.Body.Close()
+	if resp2.StatusCode != http.StatusUnauthorized {
+		t.Errorf("expected initialize to still need a credential with the flag off, got %d", resp2.StatusCode)
+	}
+	resp3 := postMCP(t, ts, "", `{"jsonrpc":"2.0","id":2,"method":"tools/list"}`)
+	defer resp3.Body.Close()
+	if resp3.StatusCode != http.StatusUnauthorized {
+		t.Errorf("expected tools/list to still need a credential with the flag off, got %d", resp3.StatusCode)
+	}
+}
+
+// @test:TestAcceptKeyInMetaInitializeAndToolsListNeedNoCredential
+func TestAcceptKeyInMetaInitializeAndToolsListNeedNoCredential(t *testing.T) {
+	ts, fake := newMetaTestServer(door.ParseKeys("k1=agent://acme.example/bot"), true)
+	defer ts.Close()
+
+	for _, body := range []string{
+		`{"jsonrpc":"2.0","id":1,"method":"initialize","params":{}}`,
+		`{"jsonrpc":"2.0","id":1,"method":"tools/list"}`,
+	} {
+		resp := postMCP(t, ts, "", body)
+		resp.Body.Close()
+		if resp.StatusCode != http.StatusOK {
+			t.Errorf("%s: expected 200 with no credential at all, got %d", body, resp.StatusCode)
+		}
+		if fake.agentID != "" {
+			t.Errorf("%s: expected an empty agent id (no credential was presented), got %q", body, fake.agentID)
+		}
+	}
+}
+
+// @test:TestAcceptKeyInMetaNotificationNeedsNoCredential
+func TestAcceptKeyInMetaNotificationNeedsNoCredential(t *testing.T) {
+	ts, _ := newMetaTestServer(door.ParseKeys("k1=agent://acme.example/bot"), true)
+	defer ts.Close()
+	resp := postMCP(t, ts, "", `{"jsonrpc":"2.0","method":"notifications/initialized"}`)
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		// capturingMCP always answers 200; the point under test is that the
+		// door let the notification through with no credential at all.
+		t.Errorf("expected the fake handler to be reached, got %d", resp.StatusCode)
+	}
+}
+
+// @test:TestAcceptKeyInMetaOnAuthenticatesToolsCallFromMeta
+//
+// The agent identity resolved from a meta credential goes through the exact
+// same door.Keys.Identity path a header does.
+func TestAcceptKeyInMetaOnAuthenticatesToolsCallFromMeta(t *testing.T) {
+	ts, fake := newMetaTestServer(door.ParseKeys("k1=agent://acme.example/bot"), true)
+	defer ts.Close()
+
+	resp := postMCP(t, ts, "", fmt.Sprintf(toolsCallWithMeta, "k1"))
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+		t.Fatalf("expected 200, got %d: %s", resp.StatusCode, body)
+	}
+	if fake.agentID != "agent://acme.example/bot" {
+		t.Errorf("expected the identity bound to the meta credential, got %q", fake.agentID)
+	}
+}
+
+// @test:TestAcceptKeyInMetaToolsCallWithNoKeyAtAllIsRefused
+//
+// Mutant: "tools/call allowed without any key when the flag is on". Neither
+// a header nor a meta credential is present; this must still be refused,
+// not treated as one more "needs no credential" case.
+func TestAcceptKeyInMetaToolsCallWithNoKeyAtAllIsRefused(t *testing.T) {
+	ts, fake := newMetaTestServer(door.ParseKeys("k1=agent://acme.example/bot"), true)
+	defer ts.Close()
+
+	resp := postMCP(t, ts, "", `{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"ask","arguments":{}}}`)
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusUnauthorized {
+		t.Fatalf("expected 401 with neither a header nor a meta credential, got %d", resp.StatusCode)
+	}
+	if fake.agentID != "" || fake.body != nil {
+		t.Errorf("the MCP handler must never have been reached, got agentID=%q body=%s", fake.agentID, fake.body)
+	}
+}
+
+// @test:TestAcceptKeyInMetaWrongMetaKeyIsRefused
+func TestAcceptKeyInMetaWrongMetaKeyIsRefused(t *testing.T) {
+	ts, _ := newMetaTestServer(door.ParseKeys("k1=agent://acme.example/bot"), true)
+	defer ts.Close()
+	resp := postMCP(t, ts, "", fmt.Sprintf(toolsCallWithMeta, "not-a-real-key"))
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusUnauthorized {
+		t.Errorf("expected 401 for an unknown meta credential, got %d", resp.StatusCode)
+	}
+}
+
+// @test:TestAcceptKeyInMetaHeaderWinsOverMetaAndMetaIsStripped
+//
+// Mutant: "header-vs-meta precedence flipped". Both a header and a (valid,
+// but DIFFERENT) meta credential are present; the header's identity must be
+// the one used, and the meta value must never reach the handler regardless.
+func TestAcceptKeyInMetaHeaderWinsOverMetaAndMetaIsStripped(t *testing.T) {
+	keys := door.ParseKeys("k1=agent://acme.example/header-bot,k2=agent://acme.example/meta-bot")
+	ts, fake := newMetaTestServer(keys, true)
+	defer ts.Close()
+
+	resp := postMCP(t, ts, "k1", fmt.Sprintf(toolsCallWithMeta, "k2"))
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+		t.Fatalf("expected 200, got %d: %s", resp.StatusCode, body)
+	}
+	if fake.agentID != "agent://acme.example/header-bot" {
+		t.Errorf("expected the HEADER's identity to win, got %q", fake.agentID)
+	}
+	if bytes.Contains(fake.body, []byte("k2")) {
+		t.Errorf("the unused meta credential must still be stripped from the forwarded body, got %s", fake.body)
+	}
+	if bytes.Contains(fake.body, []byte("_meta")) {
+		t.Errorf("expected _meta dropped entirely (it carried only the credential), got %s", fake.body)
+	}
+}
+
+// @test:TestAcceptKeyInMetaMetaKeyNeverReachesTheMCPHandler
+//
+// Mutant: "_meta key not stripped". This is the direct, structural proof for
+// invariant 33 at the one seam that matters: whatever body
+// internal/mcp.Server (and everything downstream of it: a log line, the
+// journal, the ledger, an error message, a response) ever sees, the meta
+// credential's own VALUE must not be in it, used or not.
+func TestAcceptKeyInMetaMetaKeyNeverReachesTheMCPHandler(t *testing.T) {
+	const marker = "th15-m3ta-cr3d3nt14l-must-nev3r-l1nger"
+	keys := door.ParseKeys(marker + "=agent://acme.example/bot")
+	ts, fake := newMetaTestServer(keys, true)
+	defer ts.Close()
+
+	resp := postMCP(t, ts, "", fmt.Sprintf(toolsCallWithMeta, marker))
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+		t.Fatalf("expected 200, got %d: %s", resp.StatusCode, body)
+	}
+	if fake.agentID != "agent://acme.example/bot" {
+		t.Fatalf("expected the meta credential's identity to be used when no header is present, got %q", fake.agentID)
+	}
+	if bytes.Contains(fake.body, []byte(marker)) {
+		t.Errorf("the meta credential leaked into the body internal/mcp.Server receives: %s", fake.body)
+	}
+}
+
+// @test:TestAcceptKeyInMetaOnlyChangesPOST
+//
+// GET (or any other method) on /mcp must still go through withDoor exactly
+// as it always has, flag or no flag: TYPRYX_ACCEPT_KEY_IN_META names a
+// tools/call params field, not a way around the method check.
+func TestAcceptKeyInMetaOnlyChangesPOST(t *testing.T) {
+	ts, _ := newMetaTestServer(door.ParseKeys("k1=agent://acme.example/bot"), true)
+	defer ts.Close()
+	req, _ := http.NewRequest(http.MethodGet, ts.URL+"/mcp", nil)
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("request: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusUnauthorized {
+		t.Errorf("expected 401 for GET with no credential, got %d", resp.StatusCode)
+	}
+}
+
+// TestAcceptKeyInMetaOversizedBodyIsBadRequest covers handleMCPRoute's own
+// body-read error path (the flag's io.ReadAll, distinct from
+// internal/mcp.Server's own MaxBytesReader further down the same request):
+// a body over MaxBodyBytes must be refused with 400, never let through to
+// the door decision with a half-read body.
+func TestAcceptKeyInMetaOversizedBodyIsBadRequest(t *testing.T) {
+	ts, fake := newMetaTestServer(door.ParseKeys("k1=agent://acme.example/bot"), true)
+	defer ts.Close()
+
+	oversized := strings.Repeat("a", api.MaxBodyBytes+1)
+	resp := postMCP(t, ts, "", `{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"pad":"`+oversized+`"}}`)
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusBadRequest {
+		body, _ := io.ReadAll(resp.Body)
+		t.Fatalf("expected 400 for a body over MaxBodyBytes, got %d: %s", resp.StatusCode, body)
+	}
+	if fake.agentID != "" || fake.body != nil {
+		t.Errorf("the MCP handler must never have been reached, got agentID=%q body=%s", fake.agentID, fake.body)
+	}
+}
+
+// @test:TestAcceptKeyInMetaDoesNotAffectV1Routes
+//
+// Mutant: "/v1/ask accepting a body key". /v1/* never accepts a credential
+// from the body, whatever TYPRYX_ACCEPT_KEY_IN_META says: it names one
+// field of one method on /mcp alone.
+func TestAcceptKeyInMetaDoesNotAffectV1Routes(t *testing.T) {
+	ts, _ := newMetaTestServer(door.ParseKeys("k1=agent://acme.example/bot"), true)
+	defer ts.Close()
+
+	body := `{"template":"t","state":{},"_meta":{"typryx/key":"k1"}}`
+	resp, err := http.Post(ts.URL+"/v1/ask", "application/json", bytes.NewReader([]byte(body)))
+	if err != nil {
+		t.Fatalf("request: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusUnauthorized {
+		t.Errorf("expected 401: a credential inside the JSON body of /v1/ask must never be read, got %d", resp.StatusCode)
+	}
 }
 
 func newTestServer(t *testing.T, keys door.Keys) (*httptest.Server, string) {

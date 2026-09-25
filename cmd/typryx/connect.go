@@ -44,7 +44,7 @@ func connectCmd(args []string, stdout, stderr io.Writer) int {
 	case "claude-code":
 		fmt.Fprint(stdout, connectClaudeCode(base, *keyEnv))
 	case "tokenfuse":
-		fmt.Fprint(stdout, connectTokenfuse(base))
+		fmt.Fprint(stdout, connectTokenfuse(base, *keyEnv))
 	case "curl":
 		fmt.Fprint(stdout, connectCurl(base, *keyEnv))
 	default:
@@ -73,19 +73,32 @@ claude mcp add --transport http typryx %[1]s/mcp --header "X-Typryx-Key: ${%[2]s
 `, url, keyEnv)
 }
 
-func connectTokenfuse(url string) string {
+func connectTokenfuse(url, keyEnv string) string {
 	return fmt.Sprintf(`# tokenfuse MCP broker: typryx as a named upstream
 TOKENFUSE_MCP_UPSTREAMS=typryx=%[1]s/mcp
 
 # a caller picks it with:
 X-Fuse-Mcp-Upstream: typryx
 
-# measured limitation (2026-09-25): the broker forwards to a named upstream
-# with only a content-type header, no credential and no agent identity
-# (tokenfuse crates/gateway/src/mcpbroker.rs). typryx cannot name the agent
-# behind the broker, so its journal skips that call and counts it
-# (skipped_no_agent at GET /healthz). Run typryx on loopback or a private
-# network with no TYPRYX_KEYS set while it sits behind this broker.
+# the broker forwards a brokered call with only a content-type header: no
+# credential, no agent identity (tokenfuse crates/gateway/src/mcpbroker.rs).
+# On tools/call it does resolve {{secret:NAME}} handles anywhere inside
+# params, _meta included, from its own vault, before forwarding:
+TOKENFUSE_MCP_SECRETS=typryx_key=${%[2]s}
+TOKENFUSE_MCP_SECRET_SCOPES=typryx_key=agents:agent://demo.example/support-bot
+
+# typryx opts in to reading that credential from a tools/call's own
+# params._meta, since the broker sends no header of its own:
+TYPRYX_ACCEPT_KEY_IN_META=1
+
+# a client-side tools/call then carries the handle, never a real key:
+{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"ask","arguments":{"template":"eval.outcome_met","state":{"task":"..."}},"_meta":{"typryx/key":"{{secret:typryx_key}}"}}}
+
+# with TYPRYX_ACCEPT_KEY_IN_META=1, initialize and tools/list need no
+# credential (tool schemas only); ask, ask_freeform and list_questions still
+# do, from the X-Typryx-Key header or params._meta. Without the flag every
+# /mcp call needs the header, as before. tokenfuse itself is unchanged: typryx joins it
+# through configuration alone.
 
 # the OTHER direction: typryx's own spend, visible to a tokenfuse gateway's
 # budget. tokenfuse is not changed for this; typryx joins it by pointing the
@@ -97,7 +110,7 @@ X-Fuse-Mcp-Upstream: typryx
 TYPRYX_BACKEND=openai-logprobs
 TYPRYX_OPENAI_URL=http://<your-tokenfuse-gateway-host>:<port>/v1
 TYPRYX_OPENAI_METER_HEADERS=1
-`, url)
+`, url, keyEnv)
 }
 
 func connectCurl(url, keyEnv string) string {

@@ -13,7 +13,7 @@ and recorded.
 ![Go 1.27](https://img.shields.io/badge/Go-1.27-4493f8)
 ![one direct dependency](https://img.shields.io/badge/direct%20dependency-one-2dd4bf)
 ![license Apache 2.0](https://img.shields.io/badge/license-Apache--2.0-9aa7b8)
-![tests](https://img.shields.io/badge/tests-865-brightgreen)
+![tests](https://img.shields.io/badge/tests-897-brightgreen)
 
 </div>
 
@@ -175,25 +175,44 @@ TOKENFUSE_MCP_UPSTREAMS=typryx=http://127.0.0.1:4320/mcp
 ```
 a caller picks it with `X-Fuse-Mcp-Upstream: typryx`.
 
+**The broker forwards a brokered call with only a content-type header**: no
+credential, no agent identity (`tokenfuse crates/gateway/src/mcpbroker.rs`). On
+`tools/call` it does resolve a `{{secret:NAME}}` handle anywhere inside `params`,
+`_meta` included, from its own vault, before forwarding. `TYPRYX_ACCEPT_KEY_IN_META=1`
+(off by default) lets typryx read its own credential from exactly that place: a
+`tools/call` with no `X-Typryx-Key` header may carry it at
+`params._meta["typryx/key"]` instead, resolved through the same credential check a
+header goes through. `initialize` and `tools/list` still need no credential either
+way, since neither reaches a backend or names an agent; `ask`, `ask_freeform` and
+`list_questions` stay authenticated in every case, and a header, when one is present,
+is always the one used, with the `_meta` entry stripped from the request either way
+before anything downstream ever sees it. `typryx connect tokenfuse` prints the whole
+configuration:
+
+```
+TOKENFUSE_MCP_SECRETS=typryx_key=${TYPRYX_KEY}
+TOKENFUSE_MCP_SECRET_SCOPES=typryx_key=agents:agent://demo.example/support-bot
+TYPRYX_ACCEPT_KEY_IN_META=1
+```
+and a client-side `tools/call` example carrying the handle, never a real key:
+`"_meta":{"typryx/key":"{{secret:typryx_key}}"}`.
+
 Measured 2026-09-25 (typryx on loopback with no keys, tokenfuse's `mcp-broker` built
 from `TAIPANBOX/tokenfuse` main `9bbbfc1`, `TOKENFUSE_MCP_KEYS=brokerkey:support-bot`): a
 client sending `x-fuse-key: brokerkey` and `X-Fuse-Mcp-Upstream: typryx` got
 `tools/list` (`ask`, `list_questions`) and a real `ask` answer, `customer_iban` in the
 state held back and never reaching the backend; an unknown upstream name was refused
 (`-32005 unknown mcp upstream`); tokenfuse recorded one `tool_call` event under
-`agent://demo.example/support-bot`.
-
-**A real limitation, stated rather than hidden**: the broker forwards to a named
-upstream with only a content-type header, no credential and no agent identity
-(`tokenfuse crates/gateway/src/mcpbroker.rs`). typryx cannot name the agent behind the
-broker, so its own journal skipped that call and counted it
-(`skipped_no_agent` at `GET /healthz`); the agent is on tokenfuse's record, not
-typryx's. Run typryx on loopback or a private network with no `TYPRYX_KEYS` while it
-sits behind this broker.
+`agent://demo.example/support-bot`. That run, and phase G1's own `main`, both predate
+`TYPRYX_ACCEPT_KEY_IN_META`; the live run in NOT PROVEN below is the one exercising it.
 
 tokenfuse is not changed for typryx, by decision: it runs exactly as it does without
 typryx, and typryx joins it by the broker configuration above and nothing else. The
-agent behind a brokered call stays on tokenfuse's own record.
+agent behind a brokered call is named on typryx's own journal now, when
+`TYPRYX_ACCEPT_KEY_IN_META` is on and the broker's vault carries the credential;
+without it, or for any call that skips `_meta` regardless (a client-side header, a
+plain curl), the agent is on tokenfuse's own record instead, and typryx's journal
+still counts the call as `skipped_no_agent`.
 
 **Plain HTTP:**
 
@@ -613,6 +632,7 @@ triage.anomaly_class 6b4497aec4a78b57c2b0e0b0481faa07e34eb0b7aa8297d45c6f12f4d12
 | `TYPRYX_LEDGER_DIR` | no | none | holds `answers.ndjson`, `outcomes.ndjson`; unset means `POST /v1/outcome` refuses every call with `no_ledger`, and answers are not ledgered |
 | `TYPRYX_MAX_CALLS_PER_HOUR` | no | `1000` | `0` disables it, with a warning logged at boot |
 | `TYPRYX_ALLOW_FREEFORM` | no | unset | only `1`/`true` count |
+| `TYPRYX_ACCEPT_KEY_IN_META` | no | unset | only `1`/`true` count; lets a `POST /mcp` `tools/call` with no `X-Typryx-Key` header read its credential from `params._meta["typryx/key"]` instead; see [Connect it](#connect-it) |
 | `TYPRYX_TIMEOUT_MS` | no | `2000` | backend deadline |
 | `TYPRYX_OPENAI_URL` | when `TYPRYX_BACKEND=openai-logprobs` | none | an OpenAI-compatible base URL ending in `/v1` (e.g. `http://127.0.0.1:11434/v1` for a local Ollama); must be absolute http/https with a host and no userinfo, query, or fragment |
 | `TYPRYX_OPENAI_MODEL` | when `TYPRYX_BACKEND=openai-logprobs` | none | the model name sent with every request |
@@ -681,7 +701,7 @@ go build ./...
 ./scripts/gates-have-teeth.sh
 ```
 
-343 tests. `go test ./... -race` covers every package; `internal/manifest` builds and
+368 tests. `go test ./... -race` covers every package; `internal/manifest` builds and
 starts the real binary to prove `components.json` against what it actually does; CI's
 `image` job builds the Dockerfile on every push and pull request, pushing nowhere.
 
@@ -702,6 +722,20 @@ its retry loop and `answerFrom`'s unknown-type case, both guarded ahead of them 
 `main`/`run` already carry). `cmd/typryx`'s `main`/`run` are still the signal-driven serve
 loop, proved by starting the real binary in `internal/manifest` and by process-level
 tests in `cmd/typryx/main_test.go` rather than by in-process instrumentation.
+
+Coverage after `TYPRYX_ACCEPT_KEY_IN_META` (measured 2026-09-25, `go test ./...
+-coverprofile=cover.out -race`): **88.2%** overall (excluding `examples/speed`, which the
+87.9% figure above already excludes; up from 87.9%). `internal/api` rose to **98.8%**
+(from 98.4%) with `handleMCPRoute`'s own tests, including the oversized-body 400 path.
+`internal/mcp` moved to **92.6%** (from 93.5%): the new `internal/mcp/meta.go` is 87.9%
+on `ExtractMetaKey` alone, and the untested remainder there is the same shape as
+`jev.go`'s above, three re-marshal steps that cannot fail on a value this same call
+already produced by unmarshaling valid JSON, each guarded ahead of it by the parse that
+already validated the value; `mcp.go` itself is unchanged. Unchanged: `internal/backend`,
+`internal/backend/backendtest`, `internal/calibration`, `internal/door`, `internal/ledger`,
+`internal/record`, `internal/service`, `internal/template`, `examples/calibration`,
+`cmd/typryx` (81.4%, inside rounding of the 80.8% above; the new config/wiring tests moved
+individual lines, not the package's shape).
 
 `scripts/gates-have-teeth.sh` plants 18 faults, one per gate behaviour, and requires
 each gate to fail on its own fault and pass on what it must not catch. Eleven defects
@@ -759,9 +793,14 @@ repository, and is now covered.
   undocumented by the vendor.** Nothing here can measure a bound the vendor has not
   published; `retryDelay`'s 2-second cap is this repository's own choice, not a
   vendor-stated number.
-- **typryx records no agent behind the tokenfuse broker.** The broker forwards no
-  identity to a named upstream, and tokenfuse is deliberately not changed for typryx;
-  see [Connect it](#connect-it).
+- **Without `TYPRYX_ACCEPT_KEY_IN_META`, typryx records no agent behind the tokenfuse
+  broker.** The broker forwards no identity to a named upstream by itself, and
+  tokenfuse is deliberately not changed for typryx; see [Connect it](#connect-it). With
+  the flag on and the broker's own vault carrying a scoped secret, typryx can now name
+  the agent that credential is bound to in its own journal; that identity is still
+  typryx's own `TYPRYX_KEYS` mapping, one credential at a time, not a general identity
+  channel from the broker, and an operator who wants a distinct agent per caller has to
+  provision a distinct credential and `TOKENFUSE_MCP_SECRET_SCOPES` rule per one.
 - **The launchers install it only when asked, on the `stub` backend.** stack-single
   (`WITH_TYPED=1`) and stack-up (`--with-typed`) were run with it on one development Mac;
   stack-k8s (`deploy.sh --with-typed`) is validated client-side only, no cluster was
