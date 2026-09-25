@@ -10,6 +10,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/TAIPANBOX/agent-stack-go/event"
@@ -256,6 +257,54 @@ func TestUnparseableAskBodyIs400NotA500(t *testing.T) {
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusBadRequest {
 		t.Errorf("expected 400 for unparseable JSON, got %d", resp.StatusCode)
+	}
+}
+
+// @test:TestAskRejectsABadRunID
+func TestAskRejectsABadRunID(t *testing.T) {
+	ts, _ := newTestServer(t, door.ParseKeys(""))
+	cases := map[string]string{
+		"too long":                    strings.Repeat("a", 129),
+		"a newline":                   "before\nafter",
+		"a header-splitter with CRLF": "id\r\nX-Injected: evil",
+	}
+	for name, runID := range cases {
+		t.Run(name, func(t *testing.T) {
+			body, _ := json.Marshal(map[string]any{
+				"template": "eval.outcome_met", "state": map[string]any{"task": "t"}, "run_id": runID,
+			})
+			resp, err := http.Post(ts.URL+"/v1/ask", "application/json", bytes.NewReader(body))
+			if err != nil {
+				t.Fatalf("request: %v", err)
+			}
+			defer resp.Body.Close()
+			if resp.StatusCode != http.StatusBadRequest {
+				t.Fatalf("expected 400 bad_run_id, got %d", resp.StatusCode)
+			}
+			var out map[string]string
+			if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
+				t.Fatalf("decoding error body: %v", err)
+			}
+			if out["error"] != "bad_run_id" {
+				t.Errorf("expected error code bad_run_id, got %q", out["error"])
+			}
+		})
+	}
+}
+
+// @test:TestAskAcceptsAWellFormedRunID
+func TestAskAcceptsAWellFormedRunID(t *testing.T) {
+	ts, _ := newTestServer(t, door.ParseKeys(""))
+	body, _ := json.Marshal(map[string]any{
+		"template": "eval.outcome_met", "state": map[string]any{"task": "t"}, "run_id": "eval-1234",
+	})
+	resp, err := http.Post(ts.URL+"/v1/ask", "application/json", bytes.NewReader(body))
+	if err != nil {
+		t.Fatalf("request: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Errorf("expected 200 for a well-formed run_id, got %d", resp.StatusCode)
 	}
 }
 

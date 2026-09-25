@@ -1,6 +1,9 @@
 package door
 
-import "testing"
+import (
+	"strings"
+	"testing"
+)
 
 func TestParseKeysSplitsAndTrims(t *testing.T) {
 	k := ParseKeys(" k1 , k2,k3 ")
@@ -137,6 +140,29 @@ func TestValidIdentity(t *testing.T) {
 	for _, id := range invalid {
 		if ValidIdentity(id) {
 			t.Errorf("expected %q to be rejected", id)
+		}
+	}
+}
+
+// @test:TestValidRunID
+func TestValidRunID(t *testing.T) {
+	valid := []string{"", "eval-1234", "a-run-id-with-dashes_and_underscores.and.dots", strings.Repeat("a", 128)}
+	for _, id := range valid {
+		if !ValidRunID(id) {
+			t.Errorf("expected %q (len %d) to be a valid run_id", id, len(id))
+		}
+	}
+	invalid := map[string]string{
+		"129 bytes": strings.Repeat("a", 129),
+		"a newline": "before\nafter",
+		"a carriage return + line feed (header-splitting shape)": "before\r\nX-Injected: evil",
+		"a bare tab": "before\tafter",
+		"a NUL byte": "before\x00after",
+		"a DEL byte": "before\x7fafter",
+	}
+	for name, id := range invalid {
+		if ValidRunID(id) {
+			t.Errorf("%s: expected %q to be rejected", name, id)
 		}
 	}
 }

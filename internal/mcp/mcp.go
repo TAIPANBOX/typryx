@@ -16,6 +16,7 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/TAIPANBOX/typryx/internal/door"
 	"github.com/TAIPANBOX/typryx/internal/service"
 	"github.com/TAIPANBOX/typryx/internal/template"
 )
@@ -154,23 +155,31 @@ func (s *Server) call(r *http.Request, w http.ResponseWriter, req rpcRequest, ag
 func (s *Server) dispatch(r *http.Request, name string, args map[string]any, agentID string) (any, bool) {
 	switch name {
 	case "ask":
+		runID := str(args["run_id"])
+		if !door.ValidRunID(runID) {
+			return map[string]any{"error": "bad_run_id", "message": "run_id must be at most 128 bytes with no control characters"}, true
+		}
 		stateRaw, _ := json.Marshal(args["state"])
-		req := service.AskRequest{Template: str(args["template"]), State: stateRaw, RunID: str(args["run_id"])}
-		result, refusal := s.Service.Ask(r.Context(), service.Caller{AgentID: agentID, RunID: str(args["run_id"])}, req)
+		req := service.AskRequest{Template: str(args["template"]), State: stateRaw, RunID: runID}
+		result, refusal := s.Service.Ask(r.Context(), service.Caller{AgentID: agentID, RunID: runID}, req)
 		if refusal != nil {
 			return map[string]any{"error": refusal.Code, "message": refusal.Message}, true
 		}
 		return result, false
 	case "ask_freeform":
+		runID := str(args["run_id"])
+		if !door.ValidRunID(runID) {
+			return map[string]any{"error": "bad_run_id", "message": "run_id must be at most 128 bytes with no control characters"}, true
+		}
 		stateRaw, _ := json.Marshal(args["state"])
 		criteriaRaw, _ := json.Marshal(args["criteria"])
 		req := service.AskRequest{
-			State: stateRaw, RunID: str(args["run_id"]),
+			State: stateRaw, RunID: runID,
 			Question: &service.FreeformQuestion{
 				Type: str(args["type"]), Instructions: str(args["instructions"]), Criteria: criteriaRaw,
 			},
 		}
-		result, refusal := s.Service.Ask(r.Context(), service.Caller{AgentID: agentID, RunID: str(args["run_id"])}, req)
+		result, refusal := s.Service.Ask(r.Context(), service.Caller{AgentID: agentID, RunID: runID}, req)
 		if refusal != nil {
 			return map[string]any{"error": refusal.Code, "message": refusal.Message}, true
 		}

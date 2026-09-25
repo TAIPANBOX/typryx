@@ -140,6 +140,7 @@ type Service struct {
 	Templates             *template.Registry
 	Backend               backend.Backend
 	Cap                   *Cap
+	UsdCap                *UsdCap        // nil: no daily USD spend cap
 	Ledger                *ledger.Ledger // nil: outcomes and answer ledgering are off
 	Journal               *record.Journal
 	Timeout               time.Duration
@@ -329,14 +330,42 @@ func (s *Service) ask(ctx context.Context, caller Caller, req AskRequest, tmpl t
 		return Result{}, refusal("over_hourly_cap", 429,
 			"this deployment's hourly call cap is spent")
 	}
+	// Checked before the backend call, the same way the hourly cap is: a
+	// deployment that has already spent today's budget must never make one
+	// more paid call to find that out. ">=", not ">": the call that would
+	// bring spend exactly to the limit is the one that reaches it, and must
+	// be the one refused, not the next one after it.
+	if s.UsdCap != nil && s.UsdCap.overLimit() {
+		s.Journal.Refused(caller.AgentID, req.RunID, record.RefusedData{
+			Template: tmpl.ID, TemplateVersion: version, Reason: "over_daily_spend_cap",
+		})
+		return Result{}, refusal("over_daily_spend_cap", 429,
+			"this deployment's daily spend cap is reached")
+	}
 
 	answerID := s.newID()
 	bctx, cancel := context.WithTimeout(ctx, s.timeout())
 	defer cancel()
 
+	// Identity metadata only, never state: a backend reads these to decide
+	// what, if anything, it forwards on an outbound request (the
+	// openai-logprobs backend's opt-in metering headers); they never reach
+	// the template.Egress and never influence an answer.
+	q.RunID = caller.RunID
+	q.AgentID = caller.AgentID
+
 	start := s.clock()
 	ans, usage, askErr := s.Backend.Ask(bctx, q, eg)
 	latency := s.clock().Sub(start)
+
+	// Added after ANY call that reported usage, whether the ask went on to
+	// answer, to come back unanswered, or (below) to fail outright: tokens a
+	// paid backend already burned cost money regardless of what its response
+	// validated as. UsdCap.add is a no-op for a zero or negative cost, so an
+	// unpriced backend (cost_usd always 0) never touches the daily total.
+	if s.UsdCap != nil {
+		s.UsdCap.add(usage.CostUSD)
+	}
 
 	unansweredData := record.UnansweredData{
 		Template: tmpl.ID, TemplateVersion: version, Backend: s.Backend.Name(),

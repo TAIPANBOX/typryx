@@ -50,6 +50,17 @@ type Question struct {
 	// case, an explicit object in the second) reads this instead of
 	// inferring it from NoulTrueDesc/NoulFalseDesc being empty.
 	NoulCriteriaGiven bool
+	// RunID and AgentID are identity metadata about who is asking, set by
+	// internal/service.ask from the Caller once per ask; they are never part
+	// of the state and never influence an answer. RunID is the caller's own
+	// correlation id, already validated at the API/MCP boundary (at most 128
+	// bytes, no control characters); AgentID is the agent the caller's
+	// credential resolved to, or empty when the credential names none. A
+	// backend reads these only to decide what, if anything, it forwards as
+	// identity on an outbound request (see the openai-logprobs backend's
+	// opt-in metering headers); the jev backend reads neither.
+	RunID   string
+	AgentID string
 }
 
 // Answer is what a backend answered.

@@ -86,6 +86,17 @@ X-Fuse-Mcp-Upstream: typryx
 # behind the broker, so its journal skips that call and counts it
 # (skipped_no_agent at GET /healthz). Run typryx on loopback or a private
 # network with no TYPRYX_KEYS set while it sits behind this broker.
+
+# the OTHER direction: typryx's own spend, visible to a tokenfuse gateway's
+# budget. tokenfuse is not changed for this; typryx joins it by pointing the
+# openai-logprobs backend at the gateway (its own address, not the one
+# above, which is where TYPRYX ITSELF listens) and opting in to two headers
+# tokenfuse already reads. Off by default; on, x-fuse-run-id and
+# x-fuse-agent-id carry the ask's own run id and agent, never sent to any
+# other endpoint.
+TYPRYX_BACKEND=openai-logprobs
+TYPRYX_OPENAI_URL=http://<your-tokenfuse-gateway-host>:<port>/v1
+TYPRYX_OPENAI_METER_HEADERS=1
 `, url)
 }
 

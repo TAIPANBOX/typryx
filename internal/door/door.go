@@ -149,3 +149,30 @@ func TruthyEnv(v string) bool {
 	}
 	return false
 }
+
+// MaxRunIDBytes bounds a caller-supplied run_id: long enough for a real
+// correlation id (verdryx's own usage sends ids shaped like
+// "eval-<uuid>"), short enough that nothing pathological reaches an outbound
+// header this repository may forward it in (the openai-logprobs backend's
+// opt-in x-fuse-run-id).
+const MaxRunIDBytes = 128
+
+// ValidRunID reports whether a caller-supplied run_id is safe to record and,
+// when opt-in metering headers are on, to forward as an HTTP header value:
+// at most MaxRunIDBytes bytes, and no ASCII control character anywhere in
+// it. Checking bytes, not runes, is deliberate: a control character is a
+// property of the byte, whatever multi-byte sequence it happens to sit next
+// to, and the same bound covers CR and LF, so a run_id that failed this check
+// could never split an outbound header into two. Empty is valid: run_id is
+// optional everywhere it is read.
+func ValidRunID(id string) bool {
+	if len(id) > MaxRunIDBytes {
+		return false
+	}
+	for i := 0; i < len(id); i++ {
+		if id[i] < 0x20 || id[i] == 0x7f {
+			return false
+		}
+	}
+	return true
+}

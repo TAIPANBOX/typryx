@@ -90,10 +90,11 @@ func fakeResponseBody(t *testing.T, model string, entries []tlp, usage *struct{ 
 // and records every request it received.
 type jsonServer struct {
 	*httptest.Server
-	requests atomic.Int64
-	lastPath string
-	lastBody []byte
-	lastAuth string
+	requests    atomic.Int64
+	lastPath    string
+	lastBody    []byte
+	lastAuth    string
+	lastHeaders http.Header
 }
 
 func newJSONServer(t *testing.T, status int, header map[string]string, body []byte) *jsonServer {
@@ -103,6 +104,7 @@ func newJSONServer(t *testing.T, status int, header map[string]string, body []by
 		js.requests.Add(1)
 		js.lastPath = r.URL.Path
 		js.lastAuth = r.Header.Get("Authorization")
+		js.lastHeaders = r.Header.Clone()
 		b, _ := io.ReadAll(r.Body)
 		js.lastBody = b
 		for k, v := range header {
@@ -758,5 +760,133 @@ func TestARefusalIsLoggedWithItsMachineCodeNeverItsMessage(t *testing.T) {
 				t.Errorf("the body's text reached the log or the caller: log %q, err %v", logged, err)
 			}
 		})
+	}
+}
+
+// --- opt-in metering headers (TYPRYX_OPENAI_METER_HEADERS) ------------------
+
+func noulOKBody(t *testing.T, model string) []byte {
+	return fakeResponseBody(t, model, []tlp{
+		{Token: "A", LogProb: math.Log(0.9)}, {Token: "B", LogProb: math.Log(0.1)},
+	}, nil)
+}
+
+// @test:TestMeteringHeadersAreNeverSentWhenTheFlagIsOff
+func TestMeteringHeadersAreNeverSentWhenTheFlagIsOff(t *testing.T) {
+	srv := newJSONServer(t, 200, nil, noulOKBody(t, "m"))
+	// MeterHeaders defaults to false (the zero value); a run id, an agent id
+	// and a configured default run id are all present on the question and
+	// the config, so the ONLY thing stopping either header is the flag
+	// itself.
+	o := NewOpenAI(OpenAIConfig{
+		BaseURL: srv.URL + "/v1", Model: "m", Logger: testLogger(nil),
+		DefaultRunID: "configured-default-run-id",
+	})
+	q := noulQuestion("", "")
+	q.RunID = "caller-run-id"
+	q.AgentID = "agent://acme.example/bot"
+	if _, _, err := o.Ask(context.Background(), q, template.Egress{}); err != nil {
+		t.Fatalf("Ask: %v", err)
+	}
+	if v := srv.lastHeaders.Get("X-Fuse-Run-Id"); v != "" {
+		t.Errorf("expected no X-Fuse-Run-Id header when MeterHeaders is off, got %q", v)
+	}
+	if v := srv.lastHeaders.Get("X-Fuse-Agent-Id"); v != "" {
+		t.Errorf("expected no X-Fuse-Agent-Id header when MeterHeaders is off, got %q", v)
+	}
+}
+
+// @test:TestMeteringHeadersCarryTheCallersRunIDAndAgentIDWhenOn
+func TestMeteringHeadersCarryTheCallersRunIDAndAgentIDWhenOn(t *testing.T) {
+	srv := newJSONServer(t, 200, nil, noulOKBody(t, "m"))
+	o := NewOpenAI(OpenAIConfig{
+		BaseURL: srv.URL + "/v1", Model: "m", Logger: testLogger(nil),
+		MeterHeaders: true, DefaultRunID: "configured-default-run-id",
+	})
+	q := noulQuestion("", "")
+	q.RunID = "caller-run-id"
+	q.AgentID = "agent://acme.example/bot"
+	if _, _, err := o.Ask(context.Background(), q, template.Egress{}); err != nil {
+		t.Fatalf("Ask: %v", err)
+	}
+	if got := srv.lastHeaders.Get("X-Fuse-Run-Id"); got != "caller-run-id" {
+		t.Errorf("expected the caller's own run id, got %q", got)
+	}
+	if got := srv.lastHeaders.Get("X-Fuse-Agent-Id"); got != "agent://acme.example/bot" {
+		t.Errorf("expected the caller's agent id, got %q", got)
+	}
+}
+
+// @test:TestMeteringHeadersFallBackToTheConfiguredRunIDWhenTheCallerGaveNone
+func TestMeteringHeadersFallBackToTheConfiguredRunIDWhenTheCallerGaveNone(t *testing.T) {
+	srv := newJSONServer(t, 200, nil, noulOKBody(t, "m"))
+	o := NewOpenAI(OpenAIConfig{
+		BaseURL: srv.URL + "/v1", Model: "m", Logger: testLogger(nil),
+		MeterHeaders: true, DefaultRunID: "configured-default-run-id",
+	})
+	q := noulQuestion("", "") // no RunID, no AgentID
+	if _, _, err := o.Ask(context.Background(), q, template.Egress{}); err != nil {
+		t.Fatalf("Ask: %v", err)
+	}
+	if got := srv.lastHeaders.Get("X-Fuse-Run-Id"); got != "configured-default-run-id" {
+		t.Errorf("expected the configured default run id, got %q", got)
+	}
+	if v := srv.lastHeaders.Get("X-Fuse-Agent-Id"); v != "" {
+		t.Errorf("expected no X-Fuse-Agent-Id header when the ask carried no agent id, got %q", v)
+	}
+}
+
+// @test:TestMeteringHeadersSendNeitherWhenOnButNothingIsSet
+func TestMeteringHeadersSendNeitherWhenOnButNothingIsSet(t *testing.T) {
+	srv := newJSONServer(t, 200, nil, noulOKBody(t, "m"))
+	o := NewOpenAI(OpenAIConfig{BaseURL: srv.URL + "/v1", Model: "m", Logger: testLogger(nil), MeterHeaders: true})
+	q := noulQuestion("", "")
+	if _, _, err := o.Ask(context.Background(), q, template.Egress{}); err != nil {
+		t.Fatalf("Ask: %v", err)
+	}
+	if v := srv.lastHeaders.Get("X-Fuse-Run-Id"); v != "" {
+		t.Errorf("expected no X-Fuse-Run-Id header when nothing named a run id, got %q", v)
+	}
+	if v := srv.lastHeaders.Get("X-Fuse-Agent-Id"); v != "" {
+		t.Errorf("expected no X-Fuse-Agent-Id header when the ask carried none, got %q", v)
+	}
+}
+
+// --- cost from the configured price (TYPRYX_OPENAI_PRICE_PER_MTOK_*) -------
+
+// @test:TestOpenAICostIsInputTokensTimesTheConfiguredPriceNeverSwapped
+func TestOpenAICostIsInputTokensTimesTheConfiguredPriceNeverSwapped(t *testing.T) {
+	body := fakeResponseBody(t, "m", []tlp{{Token: "A", LogProb: math.Log(0.9)}, {Token: "B", LogProb: math.Log(0.1)}},
+		&struct{ Prompt, Completion int }{Prompt: 2_000_000, Completion: 1_000_000})
+	srv := newJSONServer(t, 200, nil, body)
+	o := NewOpenAI(OpenAIConfig{
+		BaseURL: srv.URL + "/v1", Model: "m", Logger: testLogger(nil),
+		PriceInputPerMTok: 0.042, PriceOutputPerMTok: 0.5,
+	})
+	_, usage, err := o.Ask(context.Background(), noulQuestion("", ""), template.Egress{})
+	if err != nil {
+		t.Fatalf("Ask: %v", err)
+	}
+	want := 2.0*0.042 + 1.0*0.5
+	if math.Abs(usage.CostUSD-want) > 1e-9 {
+		t.Errorf("CostUSD = %v, want %v (input price times input tokens plus output price times output tokens, never swapped)", usage.CostUSD, want)
+	}
+	if usage.InputTokens != 2_000_000 || usage.OutputTokens != 1_000_000 {
+		t.Errorf("unexpected token usage: %+v", usage)
+	}
+}
+
+// @test:TestOpenAICostIsZeroWhenNoPriceIsConfigured
+func TestOpenAICostIsZeroWhenNoPriceIsConfigured(t *testing.T) {
+	body := fakeResponseBody(t, "m", []tlp{{Token: "A", LogProb: math.Log(0.9)}, {Token: "B", LogProb: math.Log(0.1)}},
+		&struct{ Prompt, Completion int }{Prompt: 500, Completion: 500})
+	srv := newJSONServer(t, 200, nil, body)
+	o := newBackend(t, srv.URL, "", testLogger(nil))
+	_, usage, err := o.Ask(context.Background(), noulQuestion("", ""), template.Egress{})
+	if err != nil {
+		t.Fatalf("Ask: %v", err)
+	}
+	if usage.CostUSD != 0 {
+		t.Errorf("CostUSD = %v, want 0 when unpriced", usage.CostUSD)
 	}
 }
