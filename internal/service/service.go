@@ -345,6 +345,7 @@ func (s *Service) ask(ctx context.Context, caller Caller, req AskRequest, tmpl t
 
 	if askErr != nil {
 		reason := "backend_error"
+		var ue *backend.UnansweredError
 		switch {
 		case ctx.Err() != nil:
 			// The CALLER's own context, not bctx (which wraps it and would
@@ -354,6 +355,14 @@ func (s *Service) ask(ctx context.Context, caller Caller, req AskRequest, tmpl t
 			reason = "canceled"
 		case bctx.Err() == context.DeadlineExceeded:
 			reason = "timeout"
+		case errors.As(askErr, &ue):
+			// A backend's own, more specific reason (e.g. no_logprobs,
+			// label_mass_too_low, too_many_options) than the generic
+			// backend_error every other failure gets. Checked after the
+			// timeout/canceled cases so a deadline or a caller cancel always
+			// wins, even if a backend happened to also wrap its own reason
+			// around a context error.
+			reason = ue.Reason
 		}
 		unansweredData.Reason = reason
 		unansweredData.Model = ans.Model
@@ -491,6 +500,12 @@ func questionFor(t template.Template) (backend.Question, []string, error) {
 		}
 		return q, keys, nil
 	case template.TypeNoul:
+		trueDesc, falseDesc, _, err := t.NoulCriteria()
+		if err != nil {
+			return q, nil, err
+		}
+		q.NoulTrueDesc = trueDesc
+		q.NoulFalseDesc = falseDesc
 		return q, []string{"true", "false"}, nil
 	}
 	return q, nil, fmt.Errorf("unknown template type %q", t.Type)

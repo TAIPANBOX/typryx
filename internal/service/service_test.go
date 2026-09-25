@@ -219,6 +219,61 @@ func TestAFailingBackendGivesUnansweredAndNeverAGuess(t *testing.T) {
 	}
 }
 
+// @test:TestABackendsNamedReasonReachesTheCallerAndTheRecord
+//
+// A backend that fails with a *backend.UnansweredError carries its own,
+// more specific reason (e.g. the openai-logprobs backend's
+// label_mass_too_low) than the generic backend_error every other error
+// gets; that reason must reach both the caller's Result and the journal's
+// typed_unanswered event, unchanged.
+func TestABackendsNamedReasonReachesTheCallerAndTheRecord(t *testing.T) {
+	tb := &backendtest.Backend{Mode: backendtest.ModeFail, Err: &backend.UnansweredError{Reason: "label_mass_too_low"}}
+	d := newService(t, noulTemplate("task"), tb)
+	result, refusal := d.Service.Ask(context.Background(),
+		service.Caller{AgentID: "agent://acme.example/bot"},
+		service.AskRequest{Template: "eval.outcome_met", State: json.RawMessage(`{"task":"t"}`)})
+	if refusal != nil {
+		t.Fatalf("expected an unanswered result, not a refusal: %+v", refusal)
+	}
+	if !result.Unanswered || result.Reason != "label_mass_too_low" {
+		t.Fatalf("expected reason %q, got unanswered=%v reason=%q", "label_mass_too_low", result.Unanswered, result.Reason)
+	}
+	events := readEvents(t, d.JournalPath)
+	found := false
+	for _, e := range events {
+		if e.Type == "typed_unanswered" {
+			found = true
+			if e.Data["reason"] != "label_mass_too_low" {
+				t.Errorf("expected the journal's reason to be label_mass_too_low, got %v", e.Data["reason"])
+			}
+		}
+	}
+	if !found {
+		t.Fatal("expected one typed_unanswered event on the journal")
+	}
+}
+
+// TestATimeoutStillWinsOverABackendsNamedReason: the backend/service
+// precedence documented in internal/service.ask must not change just
+// because a backend can now name its own reason: a deadline firing is still
+// "timeout", even if the backend's own error happens to also be an
+// UnansweredError (a backend racing its own deadline against ctx's could do
+// this).
+func TestATimeoutStillWinsOverABackendsNamedReason(t *testing.T) {
+	tb := &backendtest.Backend{Mode: backendtest.ModeHang}
+	d := newService(t, noulTemplate("task"), tb)
+	d.Service.Timeout = 10 * time.Millisecond
+	result, refusal := d.Service.Ask(context.Background(),
+		service.Caller{AgentID: "agent://acme.example/bot"},
+		service.AskRequest{Template: "eval.outcome_met", State: json.RawMessage(`{"task":"t"}`)})
+	if refusal != nil {
+		t.Fatalf("expected an unanswered result, not a refusal: %+v", refusal)
+	}
+	if result.Reason != "timeout" {
+		t.Errorf("expected timeout to win regardless, got %q", result.Reason)
+	}
+}
+
 // @test:TestACallerThatGoesAwayIsRecordedAsCanceledNotTimeout
 //
 // bctx (the backend's own deadline context) wraps the caller's ctx: if the

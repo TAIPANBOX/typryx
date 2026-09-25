@@ -34,6 +34,12 @@ type Question struct {
 	Options []Option
 	// Levels is set for Type == score; array position is the score.
 	Levels []string
+	// NoulTrueDesc and NoulFalseDesc are a noul question's criteria
+	// descriptions, set for Type == noul when the template gave any (empty
+	// otherwise; a backend that needs some text falls back to its own
+	// default, e.g. "yes"/"no").
+	NoulTrueDesc  string
+	NoulFalseDesc string
 }
 
 // Answer is what a backend answered.
