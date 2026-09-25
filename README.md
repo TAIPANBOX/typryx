@@ -397,8 +397,13 @@ id, so calibration keeps the two versions apart):
 
 Three things this shows, each read off the ledgers rather than assumed:
 
-- **The errors are leniency.** gpt-4.1-mini called 15 of the 30 wrong answers correct
-  and 1 of the 30 right ones wrong; gpt-4.1-nano called every item correct.
+- **The errors do not lean one way, and the confidence does not say which way.**
+  gpt-4.1-nano (both wordings) and qwen2.5:3b called every item correct, so they were
+  right exactly on the half that was; gpt-4.1-mini called 15 of the 30 wrong answers
+  correct and 1 of the 30 right ones wrong; gpt-4o-mini erred both ways (v1: 11 wrong
+  answers passed, 14 right ones failed; v2: 5 and 17); qwen2.5:7b never passed a wrong
+  answer and failed 20 of the 30 right ones. Mean confidence stayed between 0.958 and
+  1.000 in every group, so only a later truth tells a lenient judge from a strict one.
 - **Rewording the question barely moved it**, so the template was not the main cause.
   The backend asks for one token, because the probability is read from that token, and
   one token leaves no room to compute `17 x 13` before answering. A one-token judge is
