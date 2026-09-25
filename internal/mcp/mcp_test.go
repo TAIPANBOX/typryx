@@ -45,7 +45,7 @@ func newTestStack(t *testing.T, allowFreeform bool) (*httptest.Server, door.Keys
 	svc.AllowFreeform = allowFreeform
 
 	keys := door.ParseKeys("k1=agent://acme.example/bot")
-	mcpServer := &mcp.Server{Service: svc, AllowFreeform: allowFreeform, RunID: "test-run"}
+	mcpServer := &mcp.Server{Service: svc}
 	srv := &api.Server{Keys: keys, Service: svc, MCP: mcpServer}
 	ts := httptest.NewServer(api.NewMux(srv))
 	t.Cleanup(ts.Close)
@@ -152,6 +152,58 @@ func TestAskFreeformToolIsListedOnlyWhenFreeformIsOn(t *testing.T) {
 	}
 	if !found {
 		t.Error("expected ask_freeform to be listed when freeform is on")
+	}
+}
+
+// @test:TestTheFreeformToolIsListedExactlyWhenTheServiceAllowsIt
+//
+// mcp.Server used to carry its OWN AllowFreeform flag, separate from
+// service.Service.AllowFreeform: the two could disagree, and tools/list
+// would then answer a question the service itself would answer differently.
+// There must be exactly one source of truth, read live off the service, so
+// toggling it on the service (as buildRuntime does once, from config, but
+// which a test can do directly) is immediately reflected with no separate
+// field to keep in sync.
+func TestTheFreeformToolIsListedExactlyWhenTheServiceAllowsIt(t *testing.T) {
+	dir := t.TempDir()
+	tmpl := template.Template{ID: "t", Type: template.TypeNoul, Instructions: "is it true", Fields: []string{"task"}}
+	b, _ := json.Marshal(tmpl)
+	os.WriteFile(filepath.Join(dir, "t.json"), b, 0o644)
+	reg, _, err := template.LoadDir(dir)
+	if err != nil {
+		t.Fatalf("LoadDir: %v", err)
+	}
+	j, _ := record.Open("")
+	svc := service.New()
+	svc.Templates = reg
+	svc.Backend = backend.Stub{}
+	svc.Cap = service.NewCap(1000)
+	svc.Journal = j
+	svc.AllowFreeform = false
+
+	keys := door.ParseKeys("k1")
+	srv := &api.Server{Keys: keys, Service: svc, MCP: &mcp.Server{Service: svc}}
+	ts := httptest.NewServer(api.NewMux(srv))
+	t.Cleanup(ts.Close)
+
+	hasFreeform := func() bool {
+		out := rpcCall(t, ts, "tools/list", "k1", map[string]any{})
+		result := out["result"].(map[string]any)
+		tools, _ := result["tools"].([]any)
+		for _, tl := range tools {
+			if tl.(map[string]any)["name"] == "ask_freeform" {
+				return true
+			}
+		}
+		return false
+	}
+
+	if hasFreeform() {
+		t.Fatal("expected ask_freeform NOT listed while the service has freeform off")
+	}
+	svc.AllowFreeform = true
+	if !hasFreeform() {
+		t.Fatal("expected ask_freeform listed the moment the service's own AllowFreeform turned on, with no separate mcp-level flag to update")
 	}
 }
 

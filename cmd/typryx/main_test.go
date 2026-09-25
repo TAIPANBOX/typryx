@@ -95,13 +95,6 @@ func TestJoinSemicolon(t *testing.T) {
 	}
 }
 
-func TestRunID(t *testing.T) {
-	id := runID()
-	if !strings.HasPrefix(id, "typryx-") {
-		t.Errorf("expected a typryx- prefix, got %s", id)
-	}
-}
-
 func TestTemplatesCheckReportsEachTemplateAndFailsOnAnyInvalid(t *testing.T) {
 	dir := t.TempDir()
 	os.WriteFile(filepath.Join(dir, "good.json"), []byte(`{"id":"good","type":"noul","instructions":"x","fields":["a"]}`), 0o644)

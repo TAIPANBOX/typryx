@@ -23,10 +23,13 @@ import (
 const ProtocolVersion = "2025-06-18"
 
 // Server is the JSON-RPC surface.
+//
+// Whether ask_freeform is listed is read live off Service.AllowFreeform,
+// never a separate field here: a second copy of that flag is a second place
+// it can disagree with the service that actually enforces it, and
+// tools/list would then advertise something Ask itself would refuse.
 type Server struct {
-	Service       *service.Service
-	AllowFreeform bool
-	RunID         string
+	Service *service.Service
 }
 
 type rpcRequest struct {
@@ -253,7 +256,7 @@ func (s *Server) tools() []Tool {
 			InputSchema: Schema{Properties: map[string]Property{}},
 		},
 	}
-	if s.AllowFreeform {
+	if s.Service.AllowFreeform {
 		tools = append(tools, Tool{
 			Name:        "ask_freeform",
 			Description: "Ask a question that names no template. Only available when the operator switched freeform questions on.",

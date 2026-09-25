@@ -236,7 +236,7 @@ func buildRuntime(cfg *config, log *slog.Logger) (*runtime, error) {
 	svc.Timeout = time.Duration(cfg.timeoutMS) * time.Millisecond
 	svc.AllowFreeform = cfg.allowFreeform
 
-	mcpServer := &mcp.Server{Service: svc, AllowFreeform: cfg.allowFreeform, RunID: runID()}
+	mcpServer := &mcp.Server{Service: svc}
 	apiServer := &api.Server{Keys: cfg.keys, Service: svc, MCP: mcpServer}
 
 	srv := &http.Server{
@@ -364,10 +364,6 @@ func capState(n int64) string {
 		return "UNCAPPED"
 	}
 	return strconv.FormatInt(n, 10)
-}
-
-func runID() string {
-	return "typryx-" + strconv.FormatInt(time.Now().UTC().Unix(), 10)
 }
 
 func joinSemicolon(ss []string) string {
