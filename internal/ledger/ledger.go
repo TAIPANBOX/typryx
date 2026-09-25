@@ -45,6 +45,14 @@ type AnswerRecord struct {
 	Options         []string `json:"options,omitempty"` // choice: the valid option names
 	Levels          int      `json:"levels,omitempty"`  // score: number of levels (truth in 0..Levels-1)
 	AnsweredAt      string   `json:"answered_at"`
+
+	// Probabilities and Answer are what calibration (phase E) reads: the full
+	// distribution the answer was given under, and the served answer itself,
+	// exactly as internal/service derived it. A record written before this
+	// field existed carries neither, and calibration counts such a record as
+	// not_scorable rather than guessing at what it would have been.
+	Probabilities map[string]float64 `json:"probabilities,omitempty"`
+	Answer        json.RawMessage    `json:"answer,omitempty"`
 }
 
 // OutcomeRecord is one later truth, as written to outcomes.ndjson.

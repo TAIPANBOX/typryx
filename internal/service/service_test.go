@@ -940,3 +940,44 @@ func TestStateOverTheBoundIsRefusedWith413(t *testing.T) {
 		t.Fatalf("expected state_too_large/413, got %+v", refusal)
 	}
 }
+
+// @test:TestAnAnsweredAskLedgersItsProbabilities
+//
+// Phase E (calibration) reads answers.ndjson to compute a Brier score and a
+// reliability diagram, and it can only do that if the ledger carries the
+// full probability distribution and the served answer, not just enough to
+// validate a later truth. Before this test, ledger.AnswerRecord's
+// Probabilities and Answer fields existed (a compiling stub) but nothing in
+// this package populated them; run against that state, this test failed
+// because both came back empty on a real, answered ask.
+func TestAnAnsweredAskLedgersItsProbabilities(t *testing.T) {
+	tb := &backendtest.Backend{Mode: backendtest.ModeOK, Answer: backend.Answer{
+		Probabilities: map[string]float64{"true": 0.7, "false": 0.3}, Model: "test-0",
+	}}
+	d := newServiceWithLedger(t, noulTemplate("task"), tb)
+	result, refusal := d.Service.Ask(context.Background(), service.Caller{AgentID: "a"},
+		service.AskRequest{Template: "eval.outcome_met", State: json.RawMessage(`{"task":"t"}`)})
+	if refusal != nil {
+		t.Fatalf("unexpected refusal: %+v", refusal)
+	}
+	rec, ok := d.Ledger.GetAnswer(result.AnswerID)
+	if !ok {
+		t.Fatalf("expected the answer to be on the ledger")
+	}
+	if len(rec.Probabilities) != 2 || rec.Probabilities["true"] != 0.7 || rec.Probabilities["false"] != 0.3 {
+		t.Errorf("expected the ledgered record to carry the full probability distribution, got %#v", rec.Probabilities)
+	}
+	// For a noul question, the served Answer IS probabilities["true"] (see
+	// Result's doc comment and deriveAnswer), not a boolean: the ledgered
+	// copy must match that, not some derived yes/no.
+	var answer float64
+	if err := json.Unmarshal(rec.Answer, &answer); err != nil {
+		t.Fatalf("expected rec.Answer to be a JSON-encoded copy of the served answer, got %s: %v", rec.Answer, err)
+	}
+	if answer != result.Answer {
+		t.Errorf("expected the ledgered answer %v to match the served answer %v", answer, result.Answer)
+	}
+	if answer != 0.7 {
+		t.Errorf("expected the served noul answer to be probabilities[true]=0.7, got %v", answer)
+	}
+}

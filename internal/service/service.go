@@ -384,13 +384,21 @@ func (s *Service) ask(ctx context.Context, caller Caller, req AskRequest, tmpl t
 		rec := ledger.AnswerRecord{
 			AnswerID: answerID, Template: tmpl.ID, TemplateVersion: version,
 			Type: string(tmpl.Type), Backend: s.Backend.Name(), Model: ans.Model,
-			AnsweredAt: s.clock().UTC().Format(time.RFC3339Nano),
+			AnsweredAt:    s.clock().UTC().Format(time.RFC3339Nano),
+			Probabilities: ans.Probabilities,
 		}
 		switch tmpl.Type {
 		case template.TypeChoice:
 			rec.Options = keys
 		case template.TypeScore:
 			rec.Levels = len(keys)
+		}
+		// answerValue is always one of string, int or float64 here (see
+		// deriveAnswer), so Marshal cannot fail; a failure would mean
+		// deriveAnswer's own contract broke, not a runtime input, so it is
+		// left unset (nil) rather than panicking a real answer into a fault.
+		if b, err := json.Marshal(answerValue); err == nil {
+			rec.Answer = b
 		}
 		if err := s.Ledger.PutAnswer(rec); err != nil {
 			// The answer was already produced; a ledger write failure does
