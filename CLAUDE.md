@@ -65,9 +65,16 @@ phases.
    malformed probabilities, a cap hit: the result is `unanswered` with a
    reason, and the wire shape omits `answer` and `probabilities` entirely
    rather than sending a null or a zero. No renormalizing, no fallback guess.
+   Reasons: `backend_error`, `timeout`, `canceled`, `no_probabilities`,
+   `bad_probabilities`, `over_hourly_cap`, and, from the openai-logprobs
+   backend's own `backend.UnansweredError` (phase C), `no_logprobs`,
+   `label_mass_too_low`, `too_many_options`.
    *(test: `TestAFailingBackendGivesUnansweredAndNeverAGuess`,
    `TestBadProbabilitiesAreUnansweredNotGuessed`, both in
-   `internal/service`)*
+   `internal/service`; `TestABackendsNamedReasonReachesTheCallerAndTheRecord`
+   and `TestATimeoutStillWinsOverABackendsNamedReason`, also
+   `internal/service`, for the backend-named reasons and the precedence a
+   deadline or a caller cancel still holds over them)*
 
 2. **Only a template's `fields` leave the box.** The egress filter
    (`template.Filter`) runs before any backend sees the state, and a key not
@@ -233,8 +240,9 @@ phases.
   backend x model, never pooled across them. This is phase E (`typryx
   calibration`). Nothing in this phase reads `outcomes.ndjson` for that
   purpose; it is only written.
-- **Backends other than `stub`**: `jev` (phase D) and `openai-logprobs`
-  (phase C) do not exist. `TYPRYX_BACKEND` set to either refuses to start.
+- **`jev`** (phase D) does not exist. `TYPRYX_BACKEND=jev` refuses to start,
+  naming it. `openai-logprobs` (phase C) is now built; see README's "Local
+  model backend" for what it does and does not prove.
 - **MCP behind tokenfuse's broker**: untested until phase B2. See README.
 
 ## Tier
@@ -263,6 +271,26 @@ them). This time each fix followed the discipline phase A itself did not:
 the test was written first, run against the unfixed code, and shown red for
 the stated reason, before anything was changed.
 
+Phase C (the openai-logprobs backend) followed red-first throughout: every
+test in `internal/backend/openai_test.go`, `internal/service`'s two new
+tests, and `internal/manifest`'s three new tests were run against a
+compiling but non-functional stub (`Ask` always returning
+`UnansweredError{"not_implemented"}`, or, for the config tests, the
+pre-existing `loadConfig` that still refused any backend but `stub`) and
+shown red for the stated reason before the real implementation landed. One
+exception, named rather than smoothed over:
+`TestOpenAIBackendSurvivesHostileResponses` (the 220-seed hostile sweep)
+PASSED against the stub, vacuously: an implementation that always errors out
+trivially satisfies "never panics, never returns an invalid distribution",
+so this property test could not be meaningfully red until the real parsing
+existed to be broken. The other 24 new/changed tests all failed against
+their stub or reverted state for the reason the test names, including two
+verified by temporarily reverting a working fix with `git stash` rather than
+never having written it unfixed in the first place (the `errors.As`
+precedence in `internal/service.ask`, and `loadConfig`'s
+`TYPRYX_BACKEND=openai-logprobs` branch), since those two were implemented
+in the same pass as their tests were drafted.
+
 ## Design notes worth keeping visible
 
 - **`internal/door`, not `internal/mcp`.** Both `internal/api` and
@@ -282,8 +310,9 @@ the stated reason, before anything was changed.
   config-error paths and the wiring be tested in-process and fast, while
   `run`/`main` themselves (the signal-driven serve loop) are proved instead
   by `internal/manifest` starting the real binary and by the process-level
-  tests in `cmd/typryx/main_test.go`. Coverage on `cmd/typryx` (74.0%,
-  measured `go test ./cmd/typryx/... -cover`) undercounts on purpose for
+  tests in `cmd/typryx/main_test.go`. Coverage on `cmd/typryx` (78.0%,
+  measured `go test ./cmd/typryx/... -cover`, 2026-09-25 after phase C)
+  undercounts on purpose for
   exactly this reason: `main` and `run` show 0% in that number because a
   separate `exec.Command`-built binary is not instrumented, even though both
   are exercised by every process-level test in the package.
@@ -298,6 +327,25 @@ the stated reason, before anything was changed.
 - **State-size check runs before JSON parsing.** `template.Filter` checks the
   raw byte length against `MaxStateBytes` before calling `json.Unmarshal`, so
   an oversized hostile payload never reaches the parser.
+- **`internal/backend/openai.go`'s wire types never fail to unmarshal.**
+  `flexibleFloat` and `flexibleString` accept a JSON number, a JSON string
+  (including `"NaN"`, `"Infinity"`, a value too large for float64), or
+  anything else, and turn whatever they cannot make sense of into `NaN` or
+  `""` rather than returning an error. A single hostile `top_logprobs` entry
+  then simply does not count towards any label, instead of an
+  `encoding/json` type-mismatch on one entry discarding every other,
+  well-formed entry beside it. `probabilitiesFor` skips any non-finite value
+  explicitly, so this can never let a NaN or Inf reach a served probability.
+- **A "required when chosen" variable is `"required": false` plus a
+  `required_when` note in `components.json`.** `TYPRYX_OPENAI_URL` and
+  `TYPRYX_OPENAI_MODEL` must not be demanded of a deployment that picked
+  `TYPRYX_BACKEND=stub`, but must be demanded, by name, of one that picked
+  `openai-logprobs`; `internal/manifest`'s
+  `TestARequiredWhenChosenVariableRefusesToStartByNameWhenMissing` walks
+  every env var carrying a `required_when` note and proves both halves
+  against the real binary, generically enough that a future conditionally
+  required variable is covered by adding a working-env fixture rather than a
+  new test.
 
 ## Escalate, do not push through
 

@@ -129,3 +129,18 @@ Feature: Typed answers, as an option a customer adds to the stack
     Given an answer that already has a recorded outcome
     When another outcome arrives for that same answer
     Then it is refused, even after the service has restarted
+
+  # @test:TestTheProbabilityComesFromTheLabelTokensLogprobs
+  Scenario: A local model answers with a probability read from its own token probabilities
+    Given a local OpenAI-compatible model server with no data leaving the machine
+    And a question whose options are relabelled as single letters
+    When the server reports its own token probabilities for those letters
+    Then the answer's probability for each option comes from that model's own numbers
+    And nothing about the model's own prose is ever trusted
+
+  # @test:TestLowLabelMassIsUnansweredNotRenormalized
+  Scenario: A model that wants to answer something else is unanswered, not forced into an option
+    Given a local model whose top tokens mostly do not match any lettered option
+    When it is asked a question
+    Then the result is unanswered, with a reason
+    And the little probability mass that did land on an option is never stretched to sum to one anyway

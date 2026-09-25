@@ -77,4 +77,5 @@
   <rect x="598" y="480" width="164" height="26" rx="13" fill="#141a23" stroke="#f85149"/>
   <text x="680" y="498" text-anchor="middle" fill="#f85149">bad_probabilities</text>
 </g>
+<text x="60" y="524" font-family="ui-sans-serif,system-ui,sans-serif" font-size="12" fill="#69788b">plus backend-specific reasons, e.g. openai-logprobs: no_logprobs, label_mass_too_low, too_many_options.</text>
 </svg>

@@ -13,7 +13,7 @@ and recorded.
 ![Go 1.27](https://img.shields.io/badge/Go-1.27-4493f8)
 ![one direct dependency](https://img.shields.io/badge/direct%20dependency-one-2dd4bf)
 ![license Apache 2.0](https://img.shields.io/badge/license-Apache--2.0-9aa7b8)
-![tests](https://img.shields.io/badge/tests-228-brightgreen)
+![tests](https://img.shields.io/badge/tests-494-brightgreen)
 
 </div>
 
@@ -49,9 +49,10 @@ Each of these is something built in this repository, not a claim about a future 
 - **A spend cap is on by default**: a finite hourly call limit, counted only against
   calls that got past the door, the template lookup, and the egress filter.
 - **The model is a swappable backend, and the templates are the contract.** `stub` is
-  the only one built so far, free and deterministic; a local model and Jev (TypeSafe AI,
-  under the name "typed-decision models") are later backends behind the same interface,
-  not the point of the service.
+  free and deterministic, for tests and demos; `openai-logprobs` asks any
+  OpenAI-compatible server (a local Ollama, vLLM, llama.cpp, or a cloud endpoint) for its
+  own token probabilities. Jev (TypeSafe AI, under the name "typed-decision models") is a
+  later, paid backend behind the same interface, not the point of the service.
 - **A later truth is recorded against the exact question that was asked**, by the
   template's own content digest, never against whatever the template says today.
 
@@ -192,8 +193,49 @@ gives says `backend: stub` so nothing downstream mistakes it for a judgement.
 A backend error, a timeout, a canceled request, missing probabilities, or a probability
 set that does not validate (wrong keys, out of range, not summing to one) all produce
 `unanswered` with a `reason` (`backend_error`, `timeout`, `canceled`,
-`no_probabilities`, `bad_probabilities`) and the wire shape omits `answer` and
-`probabilities` entirely. No renormalizing, no fallback guess.
+`no_probabilities`, `bad_probabilities`, and the openai-logprobs backend's own
+`no_logprobs`, `label_mass_too_low`, `too_many_options`, see below) and the wire shape
+omits `answer` and `probabilities` entirely. No renormalizing, no fallback guess.
+
+## Local model backend
+
+`TYPRYX_BACKEND=openai-logprobs` asks any OpenAI-compatible chat-completions server
+(a local Ollama, vLLM, llama.cpp, OpenAI itself, or tokenfuse's gateway in front of a
+provider): nothing leaves the machine when the endpoint is local. Every option is
+relabelled to a single token (`A`, `B`, `C`, ...) and the probability of each comes from
+the server's own `top_logprobs` for that letter, never from anything the model writes in
+prose: `choice` gets one label per sorted option, `score` gets one label per level
+(array position is the score), `noul` gets exactly two (`A` for true, `B` for false). A
+choice with more than 26 options is refused by this backend alone (`too_many_options`);
+another backend may still take it. The request asks for one token at temperature 0 with
+`logprobs: true` and `top_logprobs: 20`; a response missing `logprobs`, `content`, or
+`top_logprobs` anywhere along that path is `unanswered` with `no_logprobs`; if the labels
+together capture less than `TYPRYX_OPENAI_MIN_LABEL_MASS` (default 0.9) of the response's
+probability mass, the result is `unanswered` with `label_mass_too_low` rather than a
+distribution stretched to sum to one anyway. The state reaches the model only as
+canonical JSON inside a fenced block, after the system message says it is data to judge,
+never instructions; only `internal/backend` builds the outbound HTTP client, follows no
+redirect, and caps the response at 1 MiB.
+
+Measured 2026-09-25 on this Mac, against Ollama 0.34.2 (`qwen2.5:3b` and `qwen2.5:7b`,
+both already pulled, `http://127.0.0.1:11434/v1`), `TYPRYX_TIMEOUT_MS=15000`:
+
+| template | state | answer | top probability | latency |
+|---|---|---|---|---|
+| `request.complexity` | "what is 2+2" | `cheap` | 0.99999990 | 314 ms |
+| `request.complexity` | "prove Fermat's last theorem... with full rigor" | `reasoning` | 0.5452 (`hard` 0.4548, a close call) | 79 ms |
+| `eval.outcome_met` | task "7 times 8", answer "56" (correct) | `true` | 0.99968 | 210 ms |
+| `eval.outcome_met` | task "7 times 8", answer "42" (**wrong**) | `true` | 0.94602 | 97 ms |
+| `eval.answer_quality` | a full, correct water-cycle summary | score `3` (fully addresses) | 0.8584 | 316 ms |
+| `eval.answer_quality` | "water go up then down lol" | score `0` (does not address) | 0.9848 | 96 ms |
+| `request.complexity` (`qwen2.5:7b`) | "what is 2+2" | `cheap` | 0.99999999 | 5067 ms (first call to this model in this process) |
+
+Reported honestly, not tuned to look good: the `eval.outcome_met` row for the wrong
+arithmetic answer is a **wrong and overconfident judgement** (`true` at 0.946 for an
+answer that does not achieve the task), taken verbatim from this run, prompts unchanged
+from what this section already describes. The `eval.answer_quality` and
+`request.complexity` rows above look sound on this small, informal sample, but six asks
+prove nothing about calibration; see NOT PROVEN.
 
 ## What leaves the box
 
@@ -262,22 +304,28 @@ typryx templates check examples/templates
 | `TYPRYX_ADDR` | no | `127.0.0.1:4320` | |
 | `TYPRYX_KEYS` | no | none | `key=agent://domain/name,key2,...` |
 | `TYPRYX_ALLOW_OPEN_BIND` | no | unset | only `1`/`true` count |
-| `TYPRYX_BACKEND` | **yes** | none | only `stub` is accepted in this phase; anything else refuses to start naming it, at exit 2 |
+| `TYPRYX_BACKEND` | **yes** | none | `stub` or `openai-logprobs` in this phase; anything else (including `jev`) refuses to start naming it, at exit 2 |
 | `TYPRYX_TEMPLATES` | **yes** | none | directory of `*.json` templates |
 | `TYPRYX_EVENTS` | no | none = journal off | NDJSON agent-event path |
 | `TYPRYX_LEDGER_DIR` | no | none | holds `answers.ndjson`, `outcomes.ndjson`; unset means `POST /v1/outcome` refuses every call with `no_ledger`, and answers are not ledgered |
 | `TYPRYX_MAX_CALLS_PER_HOUR` | no | `1000` | `0` disables it, with a warning logged at boot |
 | `TYPRYX_ALLOW_FREEFORM` | no | unset | only `1`/`true` count |
 | `TYPRYX_TIMEOUT_MS` | no | `2000` | backend deadline |
+| `TYPRYX_OPENAI_URL` | when `TYPRYX_BACKEND=openai-logprobs` | none | an OpenAI-compatible base URL ending in `/v1` (e.g. `http://127.0.0.1:11434/v1` for a local Ollama); must be absolute http/https with a host and no userinfo, query, or fragment |
+| `TYPRYX_OPENAI_MODEL` | when `TYPRYX_BACKEND=openai-logprobs` | none | the model name sent with every request |
+| `TYPRYX_OPENAI_KEY_FILE` | no | none = no `Authorization` header | path to a file holding a bearer key, trimmed; never read from the environment value itself, never logged, never echoed into an error |
+| `TYPRYX_OPENAI_MIN_LABEL_MASS` | no | `0.9` | fraction of the response's probability mass that must land on a lettered option; below it, the ask is unanswered with `label_mass_too_low` |
 
-A missing required variable exits 2 and names the variable. A non-loopback bind with no
+A missing required variable, or a required-when-chosen variable missing for the backend
+actually named, exits 2 and names the variable. A non-loopback bind with no
 `TYPRYX_KEYS` refuses to start (exit 1) unless `TYPRYX_ALLOW_OPEN_BIND=1`; required
 configuration is checked first, so that refusal always fires with the rest of the
 configuration already known sane.
 
-A future `jev` or other paid backend's API key is read from a file path named by an
-environment variable, never from the environment value itself and never logged. There
-is no such variable yet: `TYPRYX_BACKEND` set to anything but `stub` refuses to start.
+A future `jev` (or any other paid backend)'s API key is read from a file path named by
+an environment variable, the same shape `TYPRYX_OPENAI_KEY_FILE` already uses, never
+from the environment value itself and never logged. `TYPRYX_BACKEND` set to `jev`
+refuses to start; only `stub` and `openai-logprobs` are accepted in this phase.
 
 ## What it will not do
 
@@ -310,17 +358,20 @@ go build ./...
 ./scripts/gates-have-teeth.sh
 ```
 
-199 tests. `go test ./... -race` covers every package; `internal/manifest` builds and
+229 tests. `go test ./... -race` covers every package; `internal/manifest` builds and
 starts the real binary to prove `components.json` against what it actually does; CI's
 `image` job builds the Dockerfile on every push and pull request, pushing nowhere.
 
-Coverage (`go test ./... -coverprofile=cover.out`, measured 2026-09-25): **90.5%**
-overall. `internal/backend/backendtest` and `internal/record` 100%, `internal/api`
-98.4%, `internal/backend` 98.1%, `internal/door` 97.8%, `internal/service` 93.9%,
-`internal/mcp` 93.5%, `internal/template` 94.0%, `internal/ledger` 90.4%,
-`cmd/typryx` 76.5% (its `main`/`run` are the signal-driven serve loop, proved by
-starting the real binary in `internal/manifest` and by process-level tests in
-`cmd/typryx/main_test.go` rather than by in-process instrumentation).
+Coverage (`go test ./... -coverprofile=cover.out`, measured 2026-09-25, after the
+openai-logprobs backend landed): **90.6%** overall. `internal/backend/backendtest` and
+`internal/record` 100%, `internal/api` 98.4%, `internal/backend` 92.5% (up from 98.1%:
+the denominator grew with `openai.go`'s hostile-input handling, most of it exercised by
+the 220-seed sweep in `internal/backend/openai_test.go`), `internal/door` 97.8%,
+`internal/service` 93.7%, `internal/mcp` 93.5%, `internal/template` 94.0%,
+`internal/ledger` 90.4%, `cmd/typryx` 78.0% (its `main`/`run` are the signal-driven
+serve loop, proved by starting the real binary in `internal/manifest` and by
+process-level tests in `cmd/typryx/main_test.go` rather than by in-process
+instrumentation).
 
 `scripts/gates-have-teeth.sh` plants 13 faults, one per gate behaviour, and requires
 each gate to fail on its own fault and pass on what it must not catch. Eleven defects
@@ -331,8 +382,22 @@ repository, and is now covered.
 
 ## NOT PROVEN
 
-- **No real model backend exists.** `stub` is deterministic and free; its answers mean
-  nothing about any real question.
+- **`stub` answers mean nothing about any real question.** It is deterministic and free,
+  for tests and demos only.
+- **LLM token probabilities are often overconfident and uncalibrated.** The measured run
+  above shows exactly this: a wrong arithmetic answer still scored `true` at 0.946 for
+  `eval.outcome_met`. Whether, and how much, a given template x backend x model can be
+  trusted is what phase E's calibration is for; nothing in this phase measures it.
+- **Position and label bias are not measured.** Whether relabelling options A, B, C in a
+  different order, or using different letters, shifts the answer is unmeasured here.
+- **A hostile state can still steer the model's answer.** typryx keeps the state
+  structurally delimited (a fenced, JSON-escaped block, with a system message saying it
+  is data, not instructions), which is a containment measure, not a claim of injection
+  resistance: nothing here proves a sufficiently adversarial state cannot change what the
+  model says about it.
+- **The openai-logprobs backend is unpriced.** `cost_usd` is always `0`, even against a
+  paid OpenAI-compatible endpoint, because this phase has no price configuration; a paid
+  endpoint's actual cost is not tracked.
 - **Calibration is not built.** `outcomes.ndjson` is written; nothing reads it yet to
   compute a Brier score or check whether a probability can be trusted.
 - **typryx records no agent behind the tokenfuse broker.** The broker forwards no
@@ -353,12 +418,13 @@ repository, and is now covered.
 - [x] **Phase B1**: the MCP surface (`initialize`, `tools/list`, `tools/call`).
 - [x] **Phase B2**: run behind a real tokenfuse MCP broker, and from Claude Code as a
       real MCP client (see [Connect it](#connect-it)).
-- [ ] **Phase C**: a local `openai-logprobs` backend against an OpenAI-compatible
-      endpoint (Ollama, vLLM, llama.cpp).
+- [x] **Phase C**: a local `openai-logprobs` backend against an OpenAI-compatible
+      endpoint, measured against Ollama 0.34.2 (`qwen2.5:3b`, `qwen2.5:7b`); see
+      [Local model backend](#local-model-backend).
 - [ ] **Phase D**: the `jev` backend, needs a decision on signing up and spending before
       any live call.
 - [ ] **Phase E onward**: calibration, the agent-passport registration, launcher wiring
       (stack-single, stack-up, stack-k8s), and consumers (verdryx, wardryx, tokenfuse's
       router, costcrew, engram).
 
-Next: a local model backend via Ollama logprobs, then Jev.
+Next: calibration (phase E), then Jev (phase D, needs a spend decision first).
