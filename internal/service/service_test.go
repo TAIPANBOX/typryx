@@ -247,6 +247,29 @@ func TestBadProbabilitiesAreUnansweredNotGuessed(t *testing.T) {
 	}
 }
 
+// @test:TestAProbabilityForAnOptionTheTemplateDoesNotHaveIsRefused
+//
+// The expected key set (the template's option names, or "0".."n-1" for
+// score, or {"true","false"} for noul) must match EXACTLY: an extra key a
+// backend invented must not reach the caller, even when the keys the
+// template actually names sum to a valid distribution on their own.
+func TestAProbabilityForAnOptionTheTemplateDoesNotHaveIsRefused(t *testing.T) {
+	tb := &backendtest.Backend{Mode: backendtest.ModeOK, Answer: backend.Answer{
+		Probabilities: map[string]float64{"true": 0.5, "false": 0.5, "maybe": 0.3},
+		Model:         "test-0",
+	}}
+	d := newService(t, noulTemplate("task"), tb)
+	result, refusal := d.Service.Ask(context.Background(),
+		service.Caller{AgentID: "a"},
+		service.AskRequest{Template: "eval.outcome_met", State: json.RawMessage(`{"task":"t"}`)})
+	if refusal != nil {
+		t.Fatalf("unexpected refusal: %+v", refusal)
+	}
+	if !result.Unanswered || result.Reason != "bad_probabilities" {
+		t.Errorf("expected unanswered/bad_probabilities for an extra key, got unanswered=%v reason=%q", result.Unanswered, result.Reason)
+	}
+}
+
 // @test:TestTheHourlyCapRefusesTheCallAfterTheLimit
 func TestTheHourlyCapRefusesTheCallAfterTheLimit(t *testing.T) {
 	tb := &backendtest.Backend{Mode: backendtest.ModeOK, Answer: backend.Answer{

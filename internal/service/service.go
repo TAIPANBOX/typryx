@@ -455,6 +455,12 @@ func validateProbabilities(probs map[string]float64, keys []string) (string, boo
 	if len(probs) == 0 {
 		return "no_probabilities", false
 	}
+	// The key set must match EXACTLY: an extra key a backend invented, on
+	// top of every one of the template's own keys otherwise being valid and
+	// summing to 1, must not silently reach the caller as if it belonged.
+	if len(probs) != len(keys) {
+		return "bad_probabilities", false
+	}
 	sum := 0.0
 	for _, k := range keys {
 		v, present := probs[k]
