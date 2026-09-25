@@ -27,9 +27,9 @@ const (
 //
 // Fixed in code rather than chosen per call site, so a downstream count of
 // "how many high events" measures what happened rather than who wrote the
-// call. calibration_drift is declared here but not emitted in this phase: it
-// belongs to the calibration command (a later phase) and is listed now so the
-// severity is fixed before anything emits it.
+// call. calibration_drift is emitted by `typryx calibration --emit`
+// (phase E), one event per template x backend x model group whose Brier
+// score or ECE crossed a configured bound.
 const (
 	TypeAnswer           = "typed_answer"
 	TypeUnanswered       = "typed_unanswered"
@@ -165,6 +165,47 @@ func (j *Journal) Refused(agentID, runID string, d RefusedData) Outcome {
 		"reason":           d.Reason,
 	}
 	return j.emit(TypeRefused, severityRefused, agentID, runID, data)
+}
+
+// CalibrationDriftData is what a calibration_drift event records: one
+// template x backend x model group whose Brier score or ECE crossed a
+// configured bound, per `typryx calibration --emit`.
+type CalibrationDriftData struct {
+	Template        string
+	TemplateVersion string
+	Backend         string
+	Model           string
+	N               int
+	Accuracy        float64
+	MeanConfidence  float64
+	Brier           float64
+	ECE             float64
+	// BoundsCrossed names each bound that was exceeded (e.g. "max_brier",
+	// "max_ece") against the measured value that crossed it, never the
+	// configured bound alone: a reader should not have to go find the command
+	// line to see how far over it the measurement was.
+	BoundsCrossed map[string]float64
+}
+
+// CalibrationDrift records one group whose calibration crossed a bound.
+// Like every other event this journal writes, an empty agentID is skipped
+// and counted rather than given a fabricated identity (SPEC 6.1): a
+// calibration run with no --agent-id skips every event this way, and the
+// caller is expected to say so on stderr.
+func (j *Journal) CalibrationDrift(agentID string, d CalibrationDriftData) Outcome {
+	data := map[string]any{
+		"template":         d.Template,
+		"template_version": d.TemplateVersion,
+		"backend":          d.Backend,
+		"model":            d.Model,
+		"n":                d.N,
+		"accuracy":         d.Accuracy,
+		"mean_confidence":  d.MeanConfidence,
+		"brier":            d.Brier,
+		"ece":              d.ECE,
+		"bounds_crossed":   d.BoundsCrossed,
+	}
+	return j.emit(TypeCalibrationDrift, severityCalibDrift, agentID, "", data)
 }
 
 func (j *Journal) emit(kind, severity, agentID, runID string, data map[string]any) Outcome {

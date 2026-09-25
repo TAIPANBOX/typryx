@@ -129,6 +129,63 @@ func TestWriteFailedIsCountedWhenTheJournalCannotBeAppended(t *testing.T) {
 	}
 }
 
+// @test:TestACalibrationDriftEventIsHighSeverityAndCarriesTheCrossedBound
+func TestACalibrationDriftEventIsHighSeverityAndCarriesTheCrossedBound(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "events.ndjson")
+	j, err := record.Open(path)
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	defer j.Close()
+	outcome := j.CalibrationDrift("agent://acme.example/operator", record.CalibrationDriftData{
+		Template: "eval.outcome_met", TemplateVersion: "v1", Backend: "openai-logprobs", Model: "qwen2.5:3b",
+		N: 60, Accuracy: 0.6, MeanConfidence: 0.95, Brier: 0.7, ECE: 0.35,
+		BoundsCrossed: map[string]float64{"max_ece": 0.35},
+	})
+	if outcome != record.Written {
+		t.Fatalf("expected Written, got %v", outcome)
+	}
+	events, err := event.ReadFile(path)
+	if err != nil {
+		t.Fatalf("reading events: %v", err)
+	}
+	if len(events) != 1 {
+		t.Fatalf("expected 1 event, got %d", len(events))
+	}
+	e := events[0]
+	if e.Type != record.TypeCalibrationDrift || e.Schema != record.Schema || e.Source != record.Source {
+		t.Errorf("unexpected envelope: %+v", e)
+	}
+	if e.Severity != "high" {
+		t.Errorf("expected high severity for a calibration_drift event, got %s", e.Severity)
+	}
+	if e.Data["model"] != "qwen2.5:3b" || e.Data["backend"] != "openai-logprobs" {
+		t.Errorf("unexpected data: %+v", e.Data)
+	}
+	crossed, ok := e.Data["bounds_crossed"].(map[string]any)
+	if !ok || crossed["max_ece"] != 0.35 {
+		t.Errorf("expected bounds_crossed to name max_ece at 0.35, got %#v", e.Data["bounds_crossed"])
+	}
+}
+
+// @test:TestACalibrationDriftEventWithNoAgentIsSkippedAndCounted
+func TestACalibrationDriftEventWithNoAgentIsSkippedAndCounted(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "events.ndjson")
+	j, err := record.Open(path)
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	defer j.Close()
+	outcome := j.CalibrationDrift("", record.CalibrationDriftData{Template: "t"})
+	if outcome != record.SkippedNoAgentID {
+		t.Fatalf("expected SkippedNoAgentID, got %v", outcome)
+	}
+	skipped, _ := j.Counts()
+	if skipped != 1 {
+		t.Errorf("expected 1 skipped event, got %d", skipped)
+	}
+}
+
 func TestOpenOnAnUnwritableDirectoryIsAnError(t *testing.T) {
 	if os.Geteuid() == 0 {
 		t.Skip("running as root bypasses permission checks")
