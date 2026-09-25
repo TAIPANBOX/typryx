@@ -21,9 +21,11 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
+	"net/url"
 	"os"
 	"os/signal"
 	"strconv"
+	"strings"
 	"syscall"
 	"time"
 
@@ -111,6 +113,63 @@ type config struct {
 	timeoutMS       int64
 	eventsPath      string
 	ledgerDir       string
+	openai          *openaiBackendConfig
+}
+
+// openaiBackendConfig is the validated TYPRYX_OPENAI_* configuration, set
+// only when TYPRYX_BACKEND=openai-logprobs.
+type openaiBackendConfig struct {
+	url          string
+	model        string
+	key          string
+	minLabelMass float64
+}
+
+const defaultOpenAIMinLabelMass = 0.9
+
+// loadOpenAIConfig reads and validates the TYPRYX_OPENAI_* variables, which
+// are required only when TYPRYX_BACKEND=openai-logprobs (a "required when
+// chosen" shape components.json declares as required:false plus a
+// required_when note, since they must NOT be demanded of a deployment that
+// picked a different backend).
+func loadOpenAIConfig() (*openaiBackendConfig, error) {
+	rawURL := os.Getenv("TYPRYX_OPENAI_URL")
+	if rawURL == "" {
+		return nil, missingVar("TYPRYX_OPENAI_URL",
+			"set it to an OpenAI-compatible base URL ending in /v1, e.g. http://127.0.0.1:11434/v1 for a local Ollama.")
+	}
+	u, err := url.Parse(rawURL)
+	if err != nil || u.Scheme != "http" && u.Scheme != "https" || u.Host == "" ||
+		u.RawQuery != "" || u.Fragment != "" || u.User != nil {
+		return nil, badVar("TYPRYX_OPENAI_URL", rawURL,
+			"must be an absolute http or https URL with a host and no userinfo, query, or fragment")
+	}
+
+	model := os.Getenv("TYPRYX_OPENAI_MODEL")
+	if model == "" {
+		return nil, missingVar("TYPRYX_OPENAI_MODEL", "set it to the model name this endpoint should answer with.")
+	}
+
+	var key string
+	if keyFile := os.Getenv("TYPRYX_OPENAI_KEY_FILE"); keyFile != "" {
+		b, err := os.ReadFile(keyFile) // #nosec G304 -- an operator-provided path, read once at startup
+		if err != nil {
+			return nil, &configError{msg: fmt.Sprintf(
+				"TYPRYX_OPENAI_KEY_FILE=%s could not be read: %v", keyFile, err)}
+		}
+		key = strings.TrimSpace(string(b))
+	}
+
+	minLabelMass := defaultOpenAIMinLabelMass
+	if raw := os.Getenv("TYPRYX_OPENAI_MIN_LABEL_MASS"); raw != "" {
+		v, err := strconv.ParseFloat(raw, 64)
+		if err != nil || v <= 0 || v > 1 {
+			return nil, badVar("TYPRYX_OPENAI_MIN_LABEL_MASS", raw, "must be a number greater than 0 and at most 1")
+		}
+		minLabelMass = v
+	}
+
+	return &openaiBackendConfig{url: rawURL, model: model, key: key, minLabelMass: minLabelMass}, nil
 }
 
 // loadConfig reads and validates every TYPRYX_ variable. It is checked in the
@@ -124,7 +183,17 @@ func loadConfig() (*config, error) {
 	if backendName == "" {
 		return nil, missingVar("TYPRYX_BACKEND", "there is no default backend, on purpose: a paid backend must always be a named choice. Set TYPRYX_BACKEND=stub for this build.")
 	}
-	if backendName != "stub" {
+	var openaiCfg *openaiBackendConfig
+	switch backendName {
+	case "stub":
+		// nothing further to read.
+	case "openai-logprobs":
+		cfg, err := loadOpenAIConfig()
+		if err != nil {
+			return nil, err
+		}
+		openaiCfg = cfg
+	default:
 		return nil, &configError{msg: fmt.Sprintf("backend %s is not built yet", backendName)}
 	}
 
@@ -191,6 +260,7 @@ func loadConfig() (*config, error) {
 		backendName: backendName, templatesDir: templatesDir, templates: reg,
 		maxCallsPerHour: maxCallsPerHour, timeoutMS: timeoutMS,
 		eventsPath: os.Getenv("TYPRYX_EVENTS"), ledgerDir: os.Getenv("TYPRYX_LEDGER_DIR"),
+		openai: openaiCfg,
 	}, nil
 }
 
@@ -232,7 +302,18 @@ func buildRuntime(cfg *config, log *slog.Logger) (*runtime, error) {
 
 	svc := service.New()
 	svc.Templates = cfg.templates
-	svc.Backend = backend.Stub{}
+	switch cfg.backendName {
+	case "openai-logprobs":
+		svc.Backend = backend.NewOpenAI(backend.OpenAIConfig{
+			BaseURL:      cfg.openai.url,
+			Model:        cfg.openai.model,
+			APIKey:       cfg.openai.key,
+			MinLabelMass: cfg.openai.minLabelMass,
+			Logger:       log,
+		})
+	default:
+		svc.Backend = backend.Stub{}
+	}
 	svc.Cap = service.NewCap(cfg.maxCallsPerHour)
 	svc.Ledger = led
 	svc.Journal = journal

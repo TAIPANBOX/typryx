@@ -176,6 +176,173 @@ func TestLoadConfigRejectsABackendNotBuiltYet(t *testing.T) {
 	}
 }
 
+// --- openai-logprobs backend configuration ----------------------------------
+
+func openAIWorkingEnv(t *testing.T, keyFile string) map[string]string {
+	env := map[string]string{
+		"TYPRYX_BACKEND":      "openai-logprobs",
+		"TYPRYX_TEMPLATES":    validTemplatesDirForTest(t),
+		"TYPRYX_OPENAI_URL":   "http://127.0.0.1:11434/v1",
+		"TYPRYX_OPENAI_MODEL": "qwen2.5:3b",
+	}
+	if keyFile != "" {
+		env["TYPRYX_OPENAI_KEY_FILE"] = keyFile
+	}
+	return env
+}
+
+func TestLoadConfigAcceptsOpenAILogprobsBackendWithMinimalEnv(t *testing.T) {
+	clearTyprxEnv(t)
+	setEnv(t, openAIWorkingEnv(t, ""))
+	cfg, err := loadConfig()
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if cfg.backendName != "openai-logprobs" {
+		t.Errorf("expected backendName openai-logprobs, got %s", cfg.backendName)
+	}
+	if cfg.openai == nil {
+		t.Fatal("expected an openai config to be populated")
+	}
+	if cfg.openai.url != "http://127.0.0.1:11434/v1" {
+		t.Errorf("unexpected url: %s", cfg.openai.url)
+	}
+	if cfg.openai.model != "qwen2.5:3b" {
+		t.Errorf("unexpected model: %s", cfg.openai.model)
+	}
+	if cfg.openai.minLabelMass != 0.9 {
+		t.Errorf("expected the default 0.9, got %v", cfg.openai.minLabelMass)
+	}
+	if cfg.openai.key != "" {
+		t.Errorf("expected no key without TYPRYX_OPENAI_KEY_FILE, got %q", cfg.openai.key)
+	}
+}
+
+func TestLoadConfigRequiresOpenAIURLForTheOpenAIBackend(t *testing.T) {
+	clearTyprxEnv(t)
+	env := openAIWorkingEnv(t, "")
+	delete(env, "TYPRYX_OPENAI_URL")
+	setEnv(t, env)
+	_, err := loadConfig()
+	if err == nil || !strings.Contains(err.Error(), "TYPRYX_OPENAI_URL") {
+		t.Fatalf("expected an error naming TYPRYX_OPENAI_URL, got %v", err)
+	}
+	var cfgErr *configError
+	if !isConfigError(err, &cfgErr) {
+		t.Error("a missing required-when-chosen variable should be a configError (exit 2)")
+	}
+}
+
+func TestLoadConfigRequiresOpenAIModelForTheOpenAIBackend(t *testing.T) {
+	clearTyprxEnv(t)
+	env := openAIWorkingEnv(t, "")
+	delete(env, "TYPRYX_OPENAI_MODEL")
+	setEnv(t, env)
+	_, err := loadConfig()
+	if err == nil || !strings.Contains(err.Error(), "TYPRYX_OPENAI_MODEL") {
+		t.Fatalf("expected an error naming TYPRYX_OPENAI_MODEL, got %v", err)
+	}
+}
+
+func TestLoadConfigRejectsAMalformedOpenAIURL(t *testing.T) {
+	cases := []struct {
+		name string
+		url  string
+	}{
+		{"not absolute", "127.0.0.1:11434/v1"},
+		{"wrong scheme", "ftp://127.0.0.1:11434/v1"},
+		{"no host", "http:///v1"},
+		{"has a query string", "http://127.0.0.1:11434/v1?x=1"},
+		{"has a fragment", "http://127.0.0.1:11434/v1#frag"},
+		{"has userinfo", "http://user:pass@127.0.0.1:11434/v1"},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			clearTyprxEnv(t)
+			env := openAIWorkingEnv(t, "")
+			env["TYPRYX_OPENAI_URL"] = c.url
+			setEnv(t, env)
+			_, err := loadConfig()
+			if err == nil || !strings.Contains(err.Error(), "TYPRYX_OPENAI_URL") {
+				t.Fatalf("expected an error naming TYPRYX_OPENAI_URL for %q, got %v", c.url, err)
+			}
+		})
+	}
+}
+
+func TestLoadConfigReadsTheOpenAIKeyFileTrimmed(t *testing.T) {
+	clearTyprxEnv(t)
+	dir := t.TempDir()
+	keyFile := filepath.Join(dir, "key.txt")
+	if err := os.WriteFile(keyFile, []byte("  secret-key-123\n"), 0o600); err != nil {
+		t.Fatalf("writing key file: %v", err)
+	}
+	setEnv(t, openAIWorkingEnv(t, keyFile))
+	cfg, err := loadConfig()
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if cfg.openai.key != "secret-key-123" {
+		t.Errorf("expected the trimmed key, got %q", cfg.openai.key)
+	}
+}
+
+func TestLoadConfigRejectsAnUnreadableOpenAIKeyFile(t *testing.T) {
+	clearTyprxEnv(t)
+	env := openAIWorkingEnv(t, filepath.Join(t.TempDir(), "does-not-exist.txt"))
+	setEnv(t, env)
+	_, err := loadConfig()
+	if err == nil || !strings.Contains(err.Error(), "TYPRYX_OPENAI_KEY_FILE") {
+		t.Fatalf("expected an error naming TYPRYX_OPENAI_KEY_FILE, got %v", err)
+	}
+}
+
+func TestLoadConfigRejectsAMalformedMinLabelMass(t *testing.T) {
+	for _, v := range []string{"0", "-0.5", "1.5", "not-a-number"} {
+		t.Run(v, func(t *testing.T) {
+			clearTyprxEnv(t)
+			env := openAIWorkingEnv(t, "")
+			env["TYPRYX_OPENAI_MIN_LABEL_MASS"] = v
+			setEnv(t, env)
+			_, err := loadConfig()
+			if err == nil || !strings.Contains(err.Error(), "TYPRYX_OPENAI_MIN_LABEL_MASS") {
+				t.Fatalf("expected an error naming TYPRYX_OPENAI_MIN_LABEL_MASS for %q, got %v", v, err)
+			}
+		})
+	}
+}
+
+func TestLoadConfigAcceptsAValidMinLabelMass(t *testing.T) {
+	clearTyprxEnv(t)
+	env := openAIWorkingEnv(t, "")
+	env["TYPRYX_OPENAI_MIN_LABEL_MASS"] = "0.75"
+	setEnv(t, env)
+	cfg, err := loadConfig()
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if cfg.openai.minLabelMass != 0.75 {
+		t.Errorf("expected 0.75, got %v", cfg.openai.minLabelMass)
+	}
+}
+
+func TestBuildRuntimeWiresTheOpenAIBackendWhenChosen(t *testing.T) {
+	clearTyprxEnv(t)
+	setEnv(t, openAIWorkingEnv(t, ""))
+	cfg, err := loadConfig()
+	if err != nil {
+		t.Fatalf("loadConfig: %v", err)
+	}
+	rt, err := buildRuntime(cfg, testLogger())
+	if err != nil {
+		t.Fatalf("buildRuntime: %v", err)
+	}
+	defer rt.journal.Close()
+	if rt.server == nil {
+		t.Fatal("expected a server")
+	}
+}
+
 func TestLoadConfigRequiresTemplates(t *testing.T) {
 	clearTyprxEnv(t)
 	setEnv(t, map[string]string{"TYPRYX_BACKEND": "stub"})

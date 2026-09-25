@@ -20,8 +20,14 @@ import (
 	"time"
 )
 
+type requiredWhen struct {
+	Backend string `json:"backend"`
+	Why     string `json:"why"`
+}
+
 type envVar struct {
-	Required bool `json:"required"`
+	Required     bool          `json:"required"`
+	RequiredWhen *requiredWhen `json:"required_when"`
 }
 
 type openBind struct {
@@ -434,6 +440,145 @@ func TestABackendNotBuiltYetRefusesToStart(t *testing.T) {
 	}
 	if !strings.Contains(out, "jev") || !strings.Contains(out, "not built yet") {
 		t.Errorf("the refusal does not say backend jev is not built yet:\n%s", out)
+	}
+}
+
+// --- required-when-chosen variables (the openai-logprobs backend) ----------
+
+// openAIWorkingEnv is a full, valid set of the openai-logprobs backend's own
+// variables, used as the "everything else is fine" baseline when testing one
+// missing required-when-chosen variable at a time.
+func openAIWorkingEnv() map[string]string {
+	return map[string]string{
+		"TYPRYX_OPENAI_URL":   "http://127.0.0.1:11434/v1",
+		"TYPRYX_OPENAI_MODEL": "qwen2.5:3b",
+	}
+}
+
+// backendWorkingEnv maps a backend name (as a required_when note may name
+// it) to that backend's own full working environment, so
+// TestARequiredWhenChosenVariableRefusesToStartByNameWhenMissing can build a
+// "just this one variable missing" case for whichever backend a future
+// required_when note names, not only openai-logprobs.
+var backendWorkingEnv = map[string]func() map[string]string{
+	"openai-logprobs": openAIWorkingEnv,
+}
+
+// TestARequiredWhenChosenVariableRefusesToStartByNameWhenMissing walks every
+// env var components.json declares with a required_when note (currently
+// TYPRYX_OPENAI_URL and TYPRYX_OPENAI_MODEL for TYPRYX_BACKEND=openai-logprobs)
+// and starts the real binary with that one variable missing and everything
+// else that backend needs present, expecting the same missing-required exit
+// code and message-names-the-variable behavior an unconditionally required
+// variable gets.
+func TestARequiredWhenChosenVariableRefusesToStartByNameWhenMissing(t *testing.T) {
+	if testing.Short() {
+		t.Skip("starts processes")
+	}
+	m, r := load(t)
+	c := service(t, m)
+	bin := build(t, r, c.Checked.Package)
+	templatesDir := validTemplatesDir(t)
+
+	tested := 0
+	for name, v := range c.Checked.Env {
+		if v.RequiredWhen == nil {
+			continue
+		}
+		tested++
+		if v.RequiredWhen.Why == "" {
+			t.Errorf("%s declares required_when with no why", name)
+		}
+		workingFn, ok := backendWorkingEnv[v.RequiredWhen.Backend]
+		if !ok {
+			t.Fatalf("%s declares required_when.backend %q, and this test has no working-env fixture for it",
+				name, v.RequiredWhen.Backend)
+		}
+		env := []string{
+			"TYPRYX_BACKEND=" + v.RequiredWhen.Backend,
+			"TYPRYX_TEMPLATES=" + templatesDir,
+			"TYPRYX_ADDR=127.0.0.1:" + freePort(t),
+		}
+		for k, val := range workingFn() {
+			if k == name {
+				continue // the one variable under test, left out on purpose
+			}
+			env = append(env, k+"="+val)
+		}
+		up, code, out := startAndSee(t, bin, env)
+		if up {
+			t.Errorf("without %s it started; components.json's required_when says this must refuse", name)
+			continue
+		}
+		if code != c.Checked.MissingRequiredExitCode {
+			t.Errorf("without %s it exited %d; components.json says %d\n%s", name, code, c.Checked.MissingRequiredExitCode, out)
+		}
+		if !strings.Contains(out, name) {
+			t.Errorf("without %s the failure message does not name it:\n%s", name, out)
+		}
+	}
+	if tested == 0 {
+		t.Fatal("no env var declares required_when, so this measured nothing")
+	}
+}
+
+// TestOpenAILogprobsBackendStartsWithAFullConfiguration is the positive
+// control for the test above: every required_when-chosen variable present
+// together must actually be enough to start, not merely individually
+// demanded.
+func TestOpenAILogprobsBackendStartsWithAFullConfiguration(t *testing.T) {
+	if testing.Short() {
+		t.Skip("starts processes")
+	}
+	m, r := load(t)
+	c := service(t, m)
+	bin := build(t, r, c.Checked.Package)
+	templatesDir := validTemplatesDir(t)
+	env := []string{
+		"TYPRYX_BACKEND=openai-logprobs",
+		"TYPRYX_TEMPLATES=" + templatesDir,
+		"TYPRYX_ADDR=127.0.0.1:" + freePort(t),
+		"TYPRYX_OPENAI_URL=http://127.0.0.1:11434/v1",
+		"TYPRYX_OPENAI_MODEL=qwen2.5:3b",
+	}
+	up, code, out := startAndSee(t, bin, env)
+	if !up {
+		t.Fatalf("expected it to start with a full openai-logprobs configuration, exited %d\n%s", code, out)
+	}
+}
+
+// TestTheOpenAIKeyFileContentsNeverAppearInOutput starts the real binary
+// with a TYPRYX_OPENAI_KEY_FILE pointing at a fixture holding a marked
+// secret, and checks the secret never reaches the process's own stdout or
+// stderr, over and above internal/backend's own in-process
+// TestTheKeyIsSentAsBearerAndNeverLogged.
+func TestTheOpenAIKeyFileContentsNeverAppearInOutput(t *testing.T) {
+	if testing.Short() {
+		t.Skip("starts processes")
+	}
+	m, r := load(t)
+	c := service(t, m)
+	bin := build(t, r, c.Checked.Package)
+	templatesDir := validTemplatesDir(t)
+	const secret = "th3-0pen41-k3y-mus7-never-leak-9f8e7d"
+	keyFile := filepath.Join(t.TempDir(), "key.txt")
+	if err := os.WriteFile(keyFile, []byte(secret+"\n"), 0o600); err != nil {
+		t.Fatalf("writing the key fixture: %v", err)
+	}
+	env := []string{
+		"TYPRYX_BACKEND=openai-logprobs",
+		"TYPRYX_TEMPLATES=" + templatesDir,
+		"TYPRYX_ADDR=127.0.0.1:" + freePort(t),
+		"TYPRYX_OPENAI_URL=http://127.0.0.1:11434/v1",
+		"TYPRYX_OPENAI_MODEL=qwen2.5:3b",
+		"TYPRYX_OPENAI_KEY_FILE=" + keyFile,
+	}
+	up, code, out := startAndSee(t, bin, env)
+	if !up {
+		t.Fatalf("expected it to start, exited %d\n%s", code, out)
+	}
+	if strings.Contains(out, secret) {
+		t.Errorf("the key leaked into the process output: %s", out)
 	}
 }
 

@@ -30,7 +30,23 @@
           "TYPRYX_LEDGER_DIR": { "required": false },
           "TYPRYX_MAX_CALLS_PER_HOUR": { "required": false },
           "TYPRYX_ALLOW_FREEFORM": { "required": false },
-          "TYPRYX_TIMEOUT_MS": { "required": false }
+          "TYPRYX_TIMEOUT_MS": { "required": false },
+          "TYPRYX_OPENAI_URL": {
+            "required": false,
+            "required_when": {
+              "backend": "openai-logprobs",
+              "why": "the OpenAI-compatible base URL to ask (e.g. a local Ollama); there is no default endpoint"
+            }
+          },
+          "TYPRYX_OPENAI_MODEL": {
+            "required": false,
+            "required_when": {
+              "backend": "openai-logprobs",
+              "why": "the model name to send with every request; there is no default model"
+            }
+          },
+          "TYPRYX_OPENAI_KEY_FILE": { "required": false },
+          "TYPRYX_OPENAI_MIN_LABEL_MASS": { "required": false }
         },
         "missing_required_exit_code": 2,
         "refuses_an_open_bind_without_a_credential": {
@@ -49,8 +65,12 @@
           "why": "a required variable with no default is read off main.go; that the only accepted value today is free is a fact about this phase, not something the manifest schema can express on its own"
         },
         "backends_not_built_yet": {
-          "value": ["jev", "openai-logprobs"],
-          "why": "named here so a reader does not have to open the source to learn that TYPRYX_BACKEND=jev refuses to start; both are later phases"
+          "value": ["jev"],
+          "why": "named here so a reader does not have to open the source to learn that TYPRYX_BACKEND=jev refuses to start; openai-logprobs is now built (phase C), jev is still a later phase"
+        },
+        "openai_key_never_read_from_env_value": {
+          "value": "TYPRYX_OPENAI_KEY_FILE names a file path; the file's trimmed contents are used as the bearer key and are never logged or echoed into an error",
+          "why": "a manifest schema field cannot express a runtime non-disclosure guarantee; stated here so a reader does not have to open internal/backend/openai.go to learn it"
         },
         "the_ledger_is_optional": {
           "value": "unset TYPRYX_LEDGER_DIR: answers are not ledgered and POST /v1/outcome refuses every call with no_ledger",
