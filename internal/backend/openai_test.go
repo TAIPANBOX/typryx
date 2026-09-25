@@ -614,3 +614,82 @@ func aserr(err error, target **UnansweredError) bool {
 	}
 	return false
 }
+
+// --- TestALogprobAboveZeroOrAMassAboveOneIsUnanswered -----------------------
+//
+// A log-probability is at most 0, and the probabilities of distinct tokens at
+// one position sum to at most 1. A server that breaks either is not reporting
+// a distribution, and normalising what it sent would turn nonsense into a
+// confident-looking answer: logprob +5 is exp(5) = 148 of "mass", which
+// clears any label-mass bound. Found by the session model's review of the
+// phase C diff on 2026-09-25; the hostile sweep did not catch it because it
+// only checks the output, which normalisation always makes look valid.
+func TestALogprobAboveZeroOrAMassAboveOneIsUnanswered(t *testing.T) {
+	cases := map[string][]tlp{
+		"a positive logprob": {
+			{Token: "A", LogProb: 5.0},
+			{Token: "B", LogProb: math.Log(0.1)},
+		},
+		"a positive logprob on a token that is not a label": {
+			{Token: "A", LogProb: math.Log(0.95)},
+			{Token: "B", LogProb: math.Log(0.04)},
+			{Token: "Billing", LogProb: 0.5},
+		},
+		"labels whose mass sums past one": {
+			{Token: "A", LogProb: math.Log(0.7)},
+			{Token: " A", LogProb: math.Log(0.7)},
+			{Token: "B", LogProb: math.Log(0.2)},
+		},
+	}
+	for name, entries := range cases {
+		t.Run(name, func(t *testing.T) {
+			srv := newJSONServer(t, 200, nil, fakeResponseBody(t, "m", entries, nil))
+			o := newBackend(t, srv.URL, "", testLogger(nil))
+			ans, _, err := o.Ask(context.Background(), choiceQuestion("alpha", "beta"), template.Egress{})
+			var ue *UnansweredError
+			if err == nil || !aserr(err, &ue) || ue.Reason != "bad_logprobs" {
+				t.Fatalf("expected UnansweredError{bad_logprobs}, got err=%v probabilities=%v", err, ans.Probabilities)
+			}
+		})
+	}
+}
+
+// Ollama reports a certain token as -0.0 and float rounding can land a hair
+// above zero; neither is a malformed distribution.
+func TestALogprobOfNegativeZeroOrRoundingAboveZeroIsAccepted(t *testing.T) {
+	srv := newJSONServer(t, 200, nil, fakeResponseBody(t, "m", []tlp{
+		{Token: "A", LogProb: 1e-7},
+		{Token: "B", LogProb: math.Log(1e-6)},
+	}, nil))
+	if _, _, err := newBackend(t, srv.URL, "", testLogger(nil)).Ask(context.Background(), choiceQuestion("alpha", "beta"), template.Egress{}); err != nil {
+		t.Fatalf("a logprob a rounding above zero must be accepted, got %v", err)
+	}
+	srv = newJSONServer(t, 200, nil, fakeResponseBody(t, "m", []tlp{
+		{Token: "A", LogProb: math.Copysign(0, -1)},
+		{Token: "B", LogProb: math.Log(1e-6)},
+	}, nil))
+	o := newBackend(t, srv.URL, "", testLogger(nil))
+	if _, _, err := o.Ask(context.Background(), choiceQuestion("alpha", "beta"), template.Egress{}); err != nil {
+		t.Fatalf("a certain token reported as -0.0 must be accepted, got %v", err)
+	}
+}
+
+// The exact top_logprobs Ollama 0.34.2 returned for qwen2.5:3b on 2026-09-25
+// (A -0.0, C -13.9756, B -19.3513): the certain token is rounded to -0.0, so
+// the labels' mass is a hair over 1. A real server's answer must be accepted.
+func TestTheLogprobsOllamaActuallyReturnedAreAccepted(t *testing.T) {
+	srv := newJSONServer(t, 200, nil, fakeResponseBody(t, "qwen2.5:3b", []tlp{
+		{Token: "A", LogProb: math.Copysign(0, -1)},
+		{Token: "C", LogProb: -13.9756},
+		{Token: "B", LogProb: -19.3513},
+		{Token: "Billing", LogProb: -20.2952},
+	}, nil))
+	o := newBackend(t, srv.URL, "", testLogger(nil))
+	ans, _, err := o.Ask(context.Background(), choiceQuestion("billing", "sales", "technical"), template.Egress{})
+	if err != nil {
+		t.Fatalf("the measured Ollama answer must be accepted, got %v", err)
+	}
+	if ans.Probabilities["billing"] < 0.999 {
+		t.Fatalf("billing should carry almost all the mass, got %v", ans.Probabilities)
+	}
+}

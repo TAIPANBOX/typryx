@@ -186,7 +186,10 @@ func (o *OpenAI) Ask(ctx context.Context, q Question, eg template.Egress) (Answe
 		return Answer{}, Usage{}, &UnansweredError{Reason: "no_logprobs"}
 	}
 
-	probs, labelMass := probabilitiesFor(labels, top)
+	probs, labelMass, ok := probabilitiesFor(labels, top)
+	if !ok {
+		return Answer{}, Usage{}, &UnansweredError{Reason: "bad_logprobs"}
+	}
 	if labelMass < o.cfg.MinLabelMass {
 		return Answer{}, Usage{}, &UnansweredError{Reason: "label_mass_too_low"}
 	}
@@ -379,8 +382,22 @@ func (r chatResponse) firstTopLogProbs() ([]wireTopLogProb, bool) {
 	return content[0].TopLogProbs, true
 }
 
+// A log-probability is at most 0 and the probabilities of distinct tokens at
+// one position sum to at most 1, but servers round: Ollama reports a near
+// certain token as -0.0 while its true value is about -1e-6, so beside the
+// other labels the mass lands a little over 1. These two bounds admit that
+// rounding and nothing that is not a distribution.
+const (
+	maxLogprob   = 1e-6
+	maxLabelMass = 1 + 1e-3
+)
+
 // probabilitiesFor turns the server's top_logprobs into a probability per
-// label Key, plus the total label_mass those labels captured.
+// label Key, plus the total label_mass those labels captured. ok is false
+// when what the server sent is not a distribution at all: a logprob above
+// maxLogprob, or label entries whose mass exceeds maxLabelMass. Normalising
+// either would turn nonsense into a confident-looking answer (logprob +5 is
+// 148 of "mass" and clears any bound), so the caller answers bad_logprobs.
 //
 // For each label, its log-mass is the logsumexp of every top_logprobs entry
 // whose token, trimmed of whitespace, equals the label exactly
@@ -390,7 +407,7 @@ func (r chatResponse) firstTopLogProbs() ([]wireTopLogProb, bool) {
 // is safe to report only because label_mass has already cleared the
 // caller's bound by the time this is used (its true value is at most
 // exp(the lowest listed logprob), never asserted higher).
-func probabilitiesFor(labels []label, top []wireTopLogProb) (map[string]float64, float64) {
+func probabilitiesFor(labels []label, top []wireTopLogProb) (map[string]float64, float64, bool) {
 	logMass := make(map[string]float64, len(labels))
 	for _, lo := range labels {
 		logMass[lo.Label] = math.Inf(-1)
@@ -399,6 +416,9 @@ func probabilitiesFor(labels []label, top []wireTopLogProb) (map[string]float64,
 		v := float64(entry.LogProb)
 		if math.IsNaN(v) || math.IsInf(v, 0) {
 			continue
+		}
+		if v > maxLogprob {
+			return nil, 0, false
 		}
 		tok := strings.TrimSpace(string(entry.Token))
 		if _, isLabel := logMass[tok]; !isLabel {
@@ -415,6 +435,10 @@ func probabilitiesFor(labels []label, top []wireTopLogProb) (map[string]float64,
 		total += m
 	}
 
+	if total > maxLabelMass {
+		return nil, 0, false
+	}
+
 	probs := make(map[string]float64, len(labels))
 	for _, lo := range labels {
 		if total > 0 {
@@ -423,7 +447,7 @@ func probabilitiesFor(labels []label, top []wireTopLogProb) (map[string]float64,
 			probs[lo.Key] = 0
 		}
 	}
-	return probs, total
+	return probs, total, true
 }
 
 // logAddExp is log(exp(a) + exp(b)), computed the numerically stable way.

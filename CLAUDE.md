@@ -68,7 +68,16 @@ phases.
    Reasons: `backend_error`, `timeout`, `canceled`, `no_probabilities`,
    `bad_probabilities`, `over_hourly_cap`, and, from the openai-logprobs
    backend's own `backend.UnansweredError` (phase C), `no_logprobs`,
-   `label_mass_too_low`, `too_many_options`.
+   `label_mass_too_low`, `too_many_options`, `bad_logprobs`. The last is a
+   server that did not send a distribution (a logprob above 1e-6, or label
+   mass above 1.001): normalising it would turn nonsense into a confident
+   answer, so it is refused. The bounds admit Ollama's rounding of a certain
+   token to -0.0 and nothing wider. *(test:
+   `TestALogprobAboveZeroOrAMassAboveOneIsUnanswered`,
+   `TestTheLogprobsOllamaActuallyReturnedAreAccepted`; found in the session
+   model's review of phase C, 2026-09-25, after the hostile sweep passed:
+   the sweep checks the output, which normalisation always makes look valid;
+   four mutants on the two bounds each caught)*
    *(test: `TestAFailingBackendGivesUnansweredAndNeverAGuess`,
    `TestBadProbabilitiesAreUnansweredNotGuessed`, both in
    `internal/service`; `TestABackendsNamedReasonReachesTheCallerAndTheRecord`
