@@ -221,11 +221,23 @@ func TestEveryBinaryThisRepositoryBuildsIsDeclaredAndTheReverse(t *testing.T) {
 // LITERALS rather than following os.Getenv calls, because a name a helper
 // composes from parts would otherwise be invisible here and this file would
 // report a set that is quietly short.
+//
+// cmd/typryx/connect.go is skipped: it prints configuration text for OTHER
+// processes (a Claude Code MCP client, a curl invocation), and its default
+// placeholder name, TYPRYX_KEY, names a variable in THAT client's own
+// environment, not one typryx itself calls os.Getenv on. The regex cannot
+// tell "a name this binary reads" from "a name this binary prints as an
+// example for somebody else's shell", so the file that only ever does the
+// second thing is named out rather than teaching components.json a
+// variable nothing here reads (which TestConnectNeverPrintsAKey and the
+// golden connect tests would not catch, since they are not about
+// components.json at all).
 func TestTheManifestMatchesWhatTheBinaryReads(t *testing.T) {
 	m, r := load(t)
 
 	name := regexp.MustCompile(`TYPRYX_[A-Z0-9_]+`)
 	inSource := map[string]bool{}
+	skip := filepath.Join("cmd", "typryx", "connect.go")
 	err := filepath.Walk(r, func(path string, info os.FileInfo, err error) error {
 		if err != nil {
 			return err
@@ -237,6 +249,9 @@ func TestTheManifestMatchesWhatTheBinaryReads(t *testing.T) {
 			return nil
 		}
 		if !strings.HasSuffix(path, ".go") || strings.HasSuffix(path, "_test.go") {
+			return nil
+		}
+		if strings.HasSuffix(path, skip) {
 			return nil
 		}
 		b, err := os.ReadFile(path)
@@ -419,5 +434,24 @@ func TestABackendNotBuiltYetRefusesToStart(t *testing.T) {
 	}
 	if !strings.Contains(out, "jev") || !strings.Contains(out, "not built yet") {
 		t.Errorf("the refusal does not say backend jev is not built yet:\n%s", out)
+	}
+}
+
+// TestConnectGoNeverReadsAnEnvironmentVariable guards the exemption
+// TestTheManifestMatchesWhatTheBinaryReads gives cmd/typryx/connect.go: that
+// file is skipped from the TYPRYX_ scan on the premise that it only ever
+// PRINTS example configuration for other processes and never calls
+// os.Getenv itself. If it ever started reading a real environment variable,
+// the exemption above would go on hiding it from the manifest gate; this
+// fails loudly the day that premise stops being true.
+func TestConnectGoNeverReadsAnEnvironmentVariable(t *testing.T) {
+	_, r := load(t)
+	path := filepath.Join(r, "cmd", "typryx", "connect.go")
+	b, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("reading %s: %v", path, err)
+	}
+	if strings.Contains(string(b), "os.Getenv") {
+		t.Fatalf("%s now calls os.Getenv; remove its exemption from TestTheManifestMatchesWhatTheBinaryReads and declare whatever it reads in components.json", path)
 	}
 }

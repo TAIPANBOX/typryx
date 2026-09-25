@@ -97,6 +97,13 @@ Feature: Typed answers, as an option a customer adds to the stack
     Then its schema names an empty array, never a JSON null
     And every name a tool's schema requires is one of its own properties
 
+  # @test:TestConnectPrintsReadyToPasteConfiguration
+  Scenario: A customer gets the configuration for their client from one command
+    Given a customer picked a client: Claude Code, tokenfuse, or plain curl
+    When they run typryx connect for that client
+    Then they get a ready-to-paste command and configuration for it
+    And no real key is ever printed, only a placeholder and where to set it
+
   # @test:TestTheManifestMatchesWhatTheBinaryReads
   Scenario: What the service declares about itself is true
     Given the component manifest
