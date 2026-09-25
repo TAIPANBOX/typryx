@@ -1,6 +1,6 @@
 # typryx
 
-![tests](https://img.shields.io/badge/tests-191-brightgreen)
+![tests](https://img.shields.io/badge/tests-215-brightgreen)
 
 typryx is an OPTIONAL add-on to the TAIPANBOX agent-governance stack. A
 customer who does not add it runs exactly the stack they ran before. One who
@@ -155,15 +155,15 @@ is skipped and counted, visible at `GET /healthz` as
 
 ## Testing
 
-172 tests. Tier T2. `go test ./... -race` covers every package;
+191 tests. Tier T2. `go test ./... -race` covers every package;
 `internal/manifest` builds and starts the real binary to prove
 `components.json` against what it actually does.
 
 Coverage (`go test ./... -coverprofile=cover.out`, per package):
 `internal/backend/backendtest` and `internal/record` 100%,
-`internal/api` 98.4%, `internal/backend` 98.1%, `internal/door` 97.6%,
-`internal/service` 96.6%, `internal/mcp` 94.1%, `internal/template` 94.0%,
-`internal/ledger` 90.7%, `cmd/typryx` 74.0% (its `main`/`run` are the
+`internal/api` 98.4%, `internal/door` 97.8%, `internal/backend` 98.1%,
+`internal/mcp` 94.1%, `internal/template` 94.0%, `internal/service` 93.9%,
+`internal/ledger` 90.4%, `cmd/typryx` 73.9% (its `main`/`run` are the
 signal-driven serve loop, proved by starting the real binary in
 `internal/manifest` and by process-level tests in `cmd/typryx/main_test.go`
 rather than by in-process instrumentation; see CLAUDE.md).

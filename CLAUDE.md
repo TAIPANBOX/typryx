@@ -81,7 +81,7 @@ phases.
    explicitly switched on. *(test:
    `TestOnlyTheFieldsATemplateNamesReachTheBackend` in `internal/service`;
    mutant: the filter loop replaced with "keep every field", caught by that
-   test, see the mutation report in the delivery log)*
+   test)*
 
 3. **Identity comes from the credential**, `X-Typryx-Key` maps to an
    `agent://` identity through `internal/door`; a header a caller sent
@@ -130,7 +130,37 @@ phases.
    `TestAnEventWithNoAgentIsSkippedAndCounted`, both in `internal/service`;
    100% statement coverage on `internal/record`)*
 
-10. **A template is identified by its content digest.** An answer names the
+9. **The answer is derived from the probability distribution, never taken
+   from the backend's own claim.** `deriveAnswer` computes choice (the argmax
+   over the template's sorted option keys), score (the argmax index, ties to
+   the lower index) and noul (`Probabilities["true"]`) itself;
+   `backend.Answer`'s Choice/Score/Yes fields are documented as advisory and
+   are read nowhere. Found in the 2026-09-25 review. *(test:
+   `TestTheAnswerIsDerivedFromTheProbabilitiesNotTakenFromTheBackend` in
+   `internal/service`, three subtests, each run red first: a backend
+   claiming Choice "banana", Score 7, or Yes 0.99 alongside a valid,
+   disagreeing distribution had the CLAIM served in every case before the
+   fix)*
+
+10. **The probability key set must match exactly.** `validateProbabilities`
+    refuses an extra key a backend invented, even when the template's own
+    keys already sum to a valid distribution on their own; `len(probs) !=
+    len(keys)` is checked before anything else. Found in the 2026-09-25
+    review. *(test: `TestAProbabilityForAnOptionTheTemplateDoesNotHaveIsRefused`
+    in `internal/service`, run red first: an extra key reached
+    `bad_probabilities` silently, i.e. was accepted)*
+
+11. **A torn ledger tail is truncated on disk before the file is reopened for
+    append.** A half-written last line (a crash mid-fsync) is cut off both
+    `answers.ndjson` and `outcomes.ndjson` at `Open`, before the answer index
+    or the outcome-exists set is built and before an `O_APPEND` write can
+    land right after it with no separator. Found in the 2026-09-25 review.
+    *(test: `TestAnAnswerWrittenAfterATornLineSurvivesTheNextRestart` in
+    `internal/ledger`, run red first: the second `Open` succeeded, but the
+    answer written right after the crash was silently lost, merged into the
+    torn fragment rather than truncated away from it)*
+
+12. **A template is identified by its content digest.** An answer names the
     version it was asked under (`Template.Version()`, sha256 of the
     canonical form), and the ledger's `AnswerRecord` carries that version, so
     `Outcome` scores a later truth against exactly the question that was
@@ -143,30 +173,39 @@ phases.
     replaced the service's live `Templates` registry, so a mutant reading
     the registry saw the same v1 by coincidence. Fixed by actually swapping
     `Service.Templates` for a registry holding the changed template before
-    calling `Outcome`; the mutant now fails it, see the mutation report)*
+    calling `Outcome`; the mutant now fails it)*
 
-11. **components.json is true**, both buckets, proved by starting the real
+13. **An outcome is recorded once per answer, and that holds across a
+    restart.** `ledger.PutOutcome` refuses a second outcome for an
+    `answer_id` already present in the outcome-exists set built at `Open`
+    from `outcomes.ndjson`, with `ErrOutcomeExists` mapped to a 409
+    `outcome_exists` refusal. Found in the 2026-09-25 review. *(test:
+    `TestASecondOutcomeForTheSameAnswerIsRefused` in `internal/service`,
+    including a ledger close/reopen, run red first: a second, contradicting
+    outcome for the same answer was accepted)*
+
+14. **components.json is true**, both buckets, proved by starting the real
     binary. *(test: `TestTheManifestMatchesWhatTheBinaryReads` and the rest
     of `internal/manifest`)*
 
-12. **Every scenario binds to a test and back.**
+15. **Every scenario binds to a test and back.**
     *(gate: `scripts/features-are-bound.sh`)*
 
-13. **README numbers are true.**
+16. **README numbers are true.**
     *(gate: `scripts/readme-numbers.sh`)*
 
-14. **The gates have teeth.**
+17. **The gates have teeth.**
     *(gate: `scripts/gates-have-teeth.sh`)*
 
-15. **No real secret ever reaches this repository**, tracked or in history.
+18. **No real secret ever reaches this repository**, tracked or in history.
     *(gate: `scripts/no-secrets.sh`)*
 
 ### Not built yet
 
-- **Invariant 9 (calibration)**: a probability's calibration is computed per
-  template x backend x model, never pooled across them. This is phase E
-  (`typryx calibration`). Nothing in this phase reads `outcomes.ndjson` for
-  that purpose; it is only written.
+- **Calibration**: a probability's calibration is computed per template x
+  backend x model, never pooled across them. This is phase E (`typryx
+  calibration`). Nothing in this phase reads `outcomes.ndjson` for that
+  purpose; it is only written.
 - **Backends other than `stub`**: `jev` (phase D) and `openai-logprobs`
   (phase C) do not exist. `TYPRYX_BACKEND` set to either refuses to start.
 - **MCP behind tokenfuse's broker**: untested until phase B2. See README.
@@ -178,11 +217,24 @@ request bodies) and is a CLI/HTTP surface another repo will eventually
 consume. It becomes **T3** the day wardryx or tokenfuse actually consume it
 (phase J), per the estate's testing rule; nothing here reaches that bar yet
 because nothing downstream depends on it. No Fable review (paused
-estate-wide); the T2/T3 review for this phase ran as the session model
-reading every diff whole, and mutation testing was still done for the five
-invariants judgement called most load-bearing (2, 3, 6, 7, 10 above) even
-though T2 does not require it, because they are exactly the shapes where a
-wrong answer would be silent.
+estate-wide).
+
+Phase A's own 13 scenario tests were written AFTER the implementation, not
+before it: this is a stated deviation, not a claim of red-first, and it was
+caught in review. Each was still shown red rather than assumed correct, by
+reverting or planting a targeted fault in the code it depends on and
+confirming the test failed for that reason, then restoring the fix. Five
+mutants were planted by hand against the invariants judged most load-bearing
+(2, 3, 6, 7, 12 above); one of those five (invariant 12's) survived its first
+version and the test itself had to be strengthened, which is recorded there
+rather than smoothed over.
+
+On 2026-09-25 the session model read every product file whole, end to end,
+rather than a diff, and found the eleven defects fixed on branch
+`fix/review-2026-09-25` (invariants 9, 10, 11 and 13 above are four of
+them). This time each fix followed the discipline phase A itself did not:
+the test was written first, run against the unfixed code, and shown red for
+the stated reason, before anything was changed.
 
 ## Design notes worth keeping visible
 
