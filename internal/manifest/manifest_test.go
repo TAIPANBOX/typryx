@@ -416,8 +416,16 @@ func TestItRefusesWithoutEachRequiredVariable(t *testing.T) {
 	}
 }
 
-// TestABackendNotBuiltYetRefusesToStart: TYPRYX_BACKEND=jev (or anything but
-// stub) refuses, naming the backend, at the config-error exit code.
+// notBuiltBackendName is a backend name this build will never accept: unlike
+// "jev" (built as of phase D) or "openai-logprobs" (phase C), this name
+// never gains a case in cmd/typryx's loadConfig switch, so this test's own
+// claim (that an unrecognised backend refuses, naming itself) does not go
+// stale the day another backend is built.
+const notBuiltBackendName = "not-a-real-backend"
+
+// TestABackendNotBuiltYetRefusesToStart: an unrecognised TYPRYX_BACKEND (or
+// anything but stub, openai-logprobs, and jev) refuses, naming the backend,
+// at the config-error exit code.
 func TestABackendNotBuiltYetRefusesToStart(t *testing.T) {
 	if testing.Short() {
 		t.Skip("starts processes")
@@ -427,19 +435,19 @@ func TestABackendNotBuiltYetRefusesToStart(t *testing.T) {
 	bin := build(t, r, c.Checked.Package)
 	templatesDir := validTemplatesDir(t)
 	env := []string{
-		"TYPRYX_BACKEND=jev",
+		"TYPRYX_BACKEND=" + notBuiltBackendName,
 		"TYPRYX_TEMPLATES=" + templatesDir,
 		"TYPRYX_ADDR=127.0.0.1:" + freePort(t),
 	}
 	up, code, out := startAndSee(t, bin, env)
 	if up {
-		t.Fatal("TYPRYX_BACKEND=jev started; jev is not built in this phase")
+		t.Fatalf("TYPRYX_BACKEND=%s started; that name is not a backend this build has", notBuiltBackendName)
 	}
 	if code != c.Checked.MissingRequiredExitCode {
 		t.Errorf("exited %d; components.json's missing_required_exit_code is %d", code, c.Checked.MissingRequiredExitCode)
 	}
-	if !strings.Contains(out, "jev") || !strings.Contains(out, "not built yet") {
-		t.Errorf("the refusal does not say backend jev is not built yet:\n%s", out)
+	if !strings.Contains(out, notBuiltBackendName) || !strings.Contains(out, "not built yet") {
+		t.Errorf("the refusal does not say backend %s is not built yet:\n%s", notBuiltBackendName, out)
 	}
 }
 
@@ -455,13 +463,25 @@ func openAIWorkingEnv() map[string]string {
 	}
 }
 
+// jevWorkingEnv is the jev backend's own "everything else is fine" baseline,
+// parameterized on a key file path since (unlike openai-logprobs, where none
+// of its required_when variables is a file) jev's one required_when variable
+// names a file that has to exist on disk for the positive control to work.
+func jevWorkingEnv(keyFile string) map[string]string {
+	return map[string]string{
+		"TYPRYX_JEV_KEY_FILE": keyFile,
+	}
+}
+
 // backendWorkingEnv maps a backend name (as a required_when note may name
 // it) to that backend's own full working environment, so
 // TestARequiredWhenChosenVariableRefusesToStartByNameWhenMissing can build a
-// "just this one variable missing" case for whichever backend a future
-// required_when note names, not only openai-logprobs.
-var backendWorkingEnv = map[string]func() map[string]string{
-	"openai-logprobs": openAIWorkingEnv,
+// "just this one variable missing" case for whichever backend a required_when
+// note names. Every function takes the jev key file path so one signature
+// covers both backends; openai-logprobs simply ignores it.
+var backendWorkingEnv = map[string]func(jevKeyFile string) map[string]string{
+	"openai-logprobs": func(string) map[string]string { return openAIWorkingEnv() },
+	"jev":             jevWorkingEnv,
 }
 
 // TestARequiredWhenChosenVariableRefusesToStartByNameWhenMissing walks every
@@ -479,6 +499,10 @@ func TestARequiredWhenChosenVariableRefusesToStartByNameWhenMissing(t *testing.T
 	c := service(t, m)
 	bin := build(t, r, c.Checked.Package)
 	templatesDir := validTemplatesDir(t)
+	jevKeyFile := filepath.Join(t.TempDir(), "jev-key.txt")
+	if err := os.WriteFile(jevKeyFile, []byte("fake-jev-key-for-tests\n"), 0o600); err != nil {
+		t.Fatalf("writing the jev key fixture: %v", err)
+	}
 
 	tested := 0
 	for name, v := range c.Checked.Env {
@@ -499,7 +523,7 @@ func TestARequiredWhenChosenVariableRefusesToStartByNameWhenMissing(t *testing.T
 			"TYPRYX_TEMPLATES=" + templatesDir,
 			"TYPRYX_ADDR=127.0.0.1:" + freePort(t),
 		}
-		for k, val := range workingFn() {
+		for k, val := range workingFn(jevKeyFile) {
 			if k == name {
 				continue // the one variable under test, left out on purpose
 			}
@@ -572,6 +596,70 @@ func TestTheOpenAIKeyFileContentsNeverAppearInOutput(t *testing.T) {
 		"TYPRYX_OPENAI_URL=http://127.0.0.1:11434/v1",
 		"TYPRYX_OPENAI_MODEL=qwen2.5:3b",
 		"TYPRYX_OPENAI_KEY_FILE=" + keyFile,
+	}
+	up, code, out := startAndSee(t, bin, env)
+	if !up {
+		t.Fatalf("expected it to start, exited %d\n%s", code, out)
+	}
+	if strings.Contains(out, secret) {
+		t.Errorf("the key leaked into the process output: %s", out)
+	}
+}
+
+// TestJevBackendStartsWithAFullConfiguration is the jev-backend positive
+// control, the same shape as TestOpenAILogprobsBackendStartsWithAFullConfiguration:
+// TYPRYX_JEV_KEY_FILE alone (jev's only required_when-chosen variable) must
+// be enough, with TYPRYX_JEV_URL and TYPRYX_JEV_MODEL left at their defaults.
+// Starting the process makes no outbound call by itself (the backend is only
+// constructed, never asked anything at boot), so this needs no network and
+// never reaches the real api.typesafe.ai.
+func TestJevBackendStartsWithAFullConfiguration(t *testing.T) {
+	if testing.Short() {
+		t.Skip("starts processes")
+	}
+	m, r := load(t)
+	c := service(t, m)
+	bin := build(t, r, c.Checked.Package)
+	templatesDir := validTemplatesDir(t)
+	keyFile := filepath.Join(t.TempDir(), "jev-key.txt")
+	if err := os.WriteFile(keyFile, []byte("fake-jev-key\n"), 0o600); err != nil {
+		t.Fatalf("writing the jev key fixture: %v", err)
+	}
+	env := []string{
+		"TYPRYX_BACKEND=jev",
+		"TYPRYX_TEMPLATES=" + templatesDir,
+		"TYPRYX_ADDR=127.0.0.1:" + freePort(t),
+		"TYPRYX_JEV_KEY_FILE=" + keyFile,
+	}
+	up, code, out := startAndSee(t, bin, env)
+	if !up {
+		t.Fatalf("expected it to start with a full jev configuration, exited %d\n%s", code, out)
+	}
+}
+
+// TestTheJevKeyFileContentsNeverAppearInOutput starts the real binary with a
+// TYPRYX_JEV_KEY_FILE pointing at a fixture holding a marked secret, and
+// checks the secret never reaches the process's own stdout or stderr, over
+// and above internal/backend's own in-process
+// TestTheJevKeyIsSentAsBearerAndNeverLogged.
+func TestTheJevKeyFileContentsNeverAppearInOutput(t *testing.T) {
+	if testing.Short() {
+		t.Skip("starts processes")
+	}
+	m, r := load(t)
+	c := service(t, m)
+	bin := build(t, r, c.Checked.Package)
+	templatesDir := validTemplatesDir(t)
+	const secret = "th3-j3v-k3y-mus7-never-leak-2c4e6a"
+	keyFile := filepath.Join(t.TempDir(), "key.txt")
+	if err := os.WriteFile(keyFile, []byte(secret+"\n"), 0o600); err != nil {
+		t.Fatalf("writing the key fixture: %v", err)
+	}
+	env := []string{
+		"TYPRYX_BACKEND=jev",
+		"TYPRYX_TEMPLATES=" + templatesDir,
+		"TYPRYX_ADDR=127.0.0.1:" + freePort(t),
+		"TYPRYX_JEV_KEY_FILE=" + keyFile,
 	}
 	up, code, out := startAndSee(t, bin, env)
 	if !up {

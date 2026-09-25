@@ -117,6 +117,7 @@ type config struct {
 	eventsPath      string
 	ledgerDir       string
 	openai          *openaiBackendConfig
+	jev             *jevBackendConfig
 }
 
 // openaiBackendConfig is the validated TYPRYX_OPENAI_* configuration, set
@@ -129,6 +130,90 @@ type openaiBackendConfig struct {
 }
 
 const defaultOpenAIMinLabelMass = 0.9
+
+// jevBackendConfig is the validated TYPRYX_JEV_* configuration, set only
+// when TYPRYX_BACKEND=jev.
+type jevBackendConfig struct {
+	url                string
+	model              string
+	key                string
+	priceInputPerMTok  float64
+	priceOutputPerMTok float64
+}
+
+const (
+	defaultJevURL   = "https://api.typesafe.ai/v1"
+	defaultJevModel = "jev-latest"
+)
+
+// loadJevConfig reads and validates the TYPRYX_JEV_* variables, set only
+// when TYPRYX_BACKEND=jev. Unlike the openai-logprobs backend, jev is a paid
+// backend with no local, free equivalent, so its key is not merely optional:
+// TYPRYX_JEV_KEY_FILE is itself required-when-chosen (a file path, never an
+// environment value, matching TYPRYX_OPENAI_KEY_FILE's own shape), and an
+// unreadable or empty file exits 2 naming the variable, never the contents.
+func loadJevConfig() (*jevBackendConfig, error) {
+	keyFile := os.Getenv("TYPRYX_JEV_KEY_FILE")
+	if keyFile == "" {
+		return nil, missingVar("TYPRYX_JEV_KEY_FILE",
+			"set it to a file path holding the Jev API key. jev is a paid backend, so its key is always a named file, never an environment value.")
+	}
+	b, err := os.ReadFile(keyFile) // #nosec G304 G703 -- an operator-provided path from TYPRYX_JEV_KEY_FILE, read once at startup, never from a request
+	if err != nil {
+		return nil, &configError{msg: fmt.Sprintf(
+			"TYPRYX_JEV_KEY_FILE=%s could not be read: %v", keyFile, err)}
+	}
+	key := strings.TrimSpace(string(b))
+	if key == "" {
+		return nil, &configError{msg: fmt.Sprintf(
+			"TYPRYX_JEV_KEY_FILE=%s is empty", keyFile)}
+	}
+
+	rawURL := envOr("TYPRYX_JEV_URL", defaultJevURL)
+	u, err := url.Parse(rawURL)
+	if err != nil || u.Scheme != "http" && u.Scheme != "https" || u.Host == "" ||
+		u.RawQuery != "" || u.Fragment != "" || u.User != nil {
+		return nil, badVar("TYPRYX_JEV_URL", rawURL,
+			"must be an absolute http or https URL with a host and no userinfo, query, or fragment")
+	}
+
+	model := envOr("TYPRYX_JEV_MODEL", defaultJevModel)
+
+	priceIn, err := envFloat("TYPRYX_JEV_PRICE_PER_MTOK_INPUT", 0)
+	if err != nil {
+		return nil, err
+	}
+	if priceIn < 0 {
+		return nil, badVar("TYPRYX_JEV_PRICE_PER_MTOK_INPUT", strconv.FormatFloat(priceIn, 'g', -1, 64),
+			"must not be negative")
+	}
+	priceOut, err := envFloat("TYPRYX_JEV_PRICE_PER_MTOK_OUTPUT", 0)
+	if err != nil {
+		return nil, err
+	}
+	if priceOut < 0 {
+		return nil, badVar("TYPRYX_JEV_PRICE_PER_MTOK_OUTPUT", strconv.FormatFloat(priceOut, 'g', -1, 64),
+			"must not be negative")
+	}
+
+	return &jevBackendConfig{url: rawURL, model: model, key: key,
+		priceInputPerMTok: priceIn, priceOutputPerMTok: priceOut}, nil
+}
+
+// envFloat reads name as a float64, refusing a malformed value by name
+// rather than silently falling back to the default, the same reasoning
+// envInt already gives for TYPRYX_TIMEOUT_MS.
+func envFloat(name string, fallback float64) (float64, error) {
+	v := os.Getenv(name)
+	if v == "" {
+		return fallback, nil
+	}
+	f, err := strconv.ParseFloat(v, 64)
+	if err != nil {
+		return 0, badVar(name, v, "must be a number")
+	}
+	return f, nil
+}
 
 // loadOpenAIConfig reads and validates the TYPRYX_OPENAI_* variables, which
 // are required only when TYPRYX_BACKEND=openai-logprobs (a "required when
@@ -187,6 +272,7 @@ func loadConfig() (*config, error) {
 		return nil, missingVar("TYPRYX_BACKEND", "there is no default backend, on purpose: a paid backend must always be a named choice. Set TYPRYX_BACKEND=stub for this build.")
 	}
 	var openaiCfg *openaiBackendConfig
+	var jevCfg *jevBackendConfig
 	switch backendName {
 	case "stub":
 		// nothing further to read.
@@ -196,6 +282,12 @@ func loadConfig() (*config, error) {
 			return nil, err
 		}
 		openaiCfg = cfg
+	case "jev":
+		cfg, err := loadJevConfig()
+		if err != nil {
+			return nil, err
+		}
+		jevCfg = cfg
 	default:
 		return nil, &configError{msg: fmt.Sprintf("backend %s is not built yet", backendName)}
 	}
@@ -263,7 +355,7 @@ func loadConfig() (*config, error) {
 		backendName: backendName, templatesDir: templatesDir, templates: reg,
 		maxCallsPerHour: maxCallsPerHour, timeoutMS: timeoutMS,
 		eventsPath: os.Getenv("TYPRYX_EVENTS"), ledgerDir: os.Getenv("TYPRYX_LEDGER_DIR"),
-		openai: openaiCfg,
+		openai: openaiCfg, jev: jevCfg,
 	}, nil
 }
 
@@ -313,6 +405,20 @@ func buildRuntime(cfg *config, log *slog.Logger) (*runtime, error) {
 			APIKey:       cfg.openai.key,
 			MinLabelMass: cfg.openai.minLabelMass,
 			Logger:       log,
+		})
+	case "jev":
+		// The URL was already validated by loadJevConfig; re-parsing it here
+		// only extracts the host for the log line below, never the key.
+		jevURL, _ := url.Parse(cfg.jev.url)
+		log.Info("typryx jev backend configured",
+			"url_host", jevURL.Host, "model", cfg.jev.model)
+		svc.Backend = backend.NewJev(backend.JevConfig{
+			BaseURL:            cfg.jev.url,
+			Model:              cfg.jev.model,
+			APIKey:             cfg.jev.key,
+			PriceInputPerMTok:  cfg.jev.priceInputPerMTok,
+			PriceOutputPerMTok: cfg.jev.priceOutputPerMTok,
+			Logger:             log,
 		})
 	default:
 		svc.Backend = backend.Stub{}

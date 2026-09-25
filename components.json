@@ -46,7 +46,18 @@
             }
           },
           "TYPRYX_OPENAI_KEY_FILE": { "required": false },
-          "TYPRYX_OPENAI_MIN_LABEL_MASS": { "required": false }
+          "TYPRYX_OPENAI_MIN_LABEL_MASS": { "required": false },
+          "TYPRYX_JEV_KEY_FILE": {
+            "required": false,
+            "required_when": {
+              "backend": "jev",
+              "why": "jev is a paid backend; its API key is always a named file path, never an environment value, and there is no default"
+            }
+          },
+          "TYPRYX_JEV_URL": { "required": false },
+          "TYPRYX_JEV_MODEL": { "required": false },
+          "TYPRYX_JEV_PRICE_PER_MTOK_INPUT": { "required": false },
+          "TYPRYX_JEV_PRICE_PER_MTOK_OUTPUT": { "required": false }
         },
         "missing_required_exit_code": 2,
         "refuses_an_open_bind_without_a_credential": {
@@ -65,12 +76,20 @@
           "why": "a required variable with no default is read off main.go; that the only accepted value today is free is a fact about this phase, not something the manifest schema can express on its own"
         },
         "backends_not_built_yet": {
-          "value": ["jev"],
-          "why": "named here so a reader does not have to open the source to learn that TYPRYX_BACKEND=jev refuses to start; openai-logprobs is now built (phase C), jev is still a later phase"
+          "value": [],
+          "why": "openai-logprobs (phase C) and jev (phase D) are both built now; kept as an empty list rather than removed, so a reader knows this field is maintained and not merely absent"
+        },
+        "jev_is_built_but_not_run_live": {
+          "value": "TYPRYX_BACKEND=jev starts and makes real HTTP calls to TYPRYX_JEV_URL; it has been run only against an httptest fake replaying the documented wire shape, never against the real api.typesafe.ai (no key, and a live call is a spending decision)",
+          "why": "a manifest schema field cannot express 'built but never run against the real service'; stated here so a reader does not have to open README.md's NOT PROVEN section to learn it"
         },
         "openai_key_never_read_from_env_value": {
           "value": "TYPRYX_OPENAI_KEY_FILE names a file path; the file's trimmed contents are used as the bearer key and are never logged or echoed into an error",
           "why": "a manifest schema field cannot express a runtime non-disclosure guarantee; stated here so a reader does not have to open internal/backend/openai.go to learn it"
+        },
+        "jev_key_never_read_from_env_value": {
+          "value": "TYPRYX_JEV_KEY_FILE names a file path; the file's trimmed contents are used as the bearer key and are never logged or echoed into an error",
+          "why": "a manifest schema field cannot express a runtime non-disclosure guarantee; stated here so a reader does not have to open internal/backend/jev.go to learn it"
         },
         "the_ledger_is_optional": {
           "value": "unset TYPRYX_LEDGER_DIR: answers are not ledgered and POST /v1/outcome refuses every call with no_ledger",

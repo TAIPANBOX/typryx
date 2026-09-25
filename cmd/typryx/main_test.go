@@ -167,12 +167,19 @@ func TestLoadConfigRequiresBackend(t *testing.T) {
 	}
 }
 
+// notBuiltBackendName is a backend name this build will never accept: unlike
+// "jev" (built as of phase D) or "openai-logprobs" (phase C), this name
+// never gains a case in loadConfig's switch, so this test's own claim (that
+// an unrecognised backend refuses, naming itself) does not go stale the day
+// another backend is built.
+const notBuiltBackendName = "not-a-real-backend"
+
 func TestLoadConfigRejectsABackendNotBuiltYet(t *testing.T) {
 	clearTyprxEnv(t)
-	setEnv(t, map[string]string{"TYPRYX_BACKEND": "jev", "TYPRYX_TEMPLATES": validTemplatesDirForTest(t)})
+	setEnv(t, map[string]string{"TYPRYX_BACKEND": notBuiltBackendName, "TYPRYX_TEMPLATES": validTemplatesDirForTest(t)})
 	_, err := loadConfig()
-	if err == nil || !strings.Contains(err.Error(), "jev") || !strings.Contains(err.Error(), "not built yet") {
-		t.Fatalf("expected a 'backend jev is not built yet' error, got %v", err)
+	if err == nil || !strings.Contains(err.Error(), notBuiltBackendName) || !strings.Contains(err.Error(), "not built yet") {
+		t.Fatalf("expected a 'backend %s is not built yet' error, got %v", notBuiltBackendName, err)
 	}
 }
 
@@ -329,6 +336,204 @@ func TestLoadConfigAcceptsAValidMinLabelMass(t *testing.T) {
 func TestBuildRuntimeWiresTheOpenAIBackendWhenChosen(t *testing.T) {
 	clearTyprxEnv(t)
 	setEnv(t, openAIWorkingEnv(t, ""))
+	cfg, err := loadConfig()
+	if err != nil {
+		t.Fatalf("loadConfig: %v", err)
+	}
+	rt, err := buildRuntime(cfg, testLogger())
+	if err != nil {
+		t.Fatalf("buildRuntime: %v", err)
+	}
+	defer rt.journal.Close()
+	if rt.server == nil {
+		t.Fatal("expected a server")
+	}
+}
+
+// --- jev backend configuration -----------------------------------------------
+
+func jevWorkingEnv(t *testing.T, keyFile string) map[string]string {
+	if keyFile == "" {
+		dir := t.TempDir()
+		keyFile = filepath.Join(dir, "jev-key.txt")
+		if err := os.WriteFile(keyFile, []byte("fake-jev-key-for-tests\n"), 0o600); err != nil {
+			t.Fatalf("writing the jev key fixture: %v", err)
+		}
+	}
+	return map[string]string{
+		"TYPRYX_BACKEND":      "jev",
+		"TYPRYX_TEMPLATES":    validTemplatesDirForTest(t),
+		"TYPRYX_JEV_KEY_FILE": keyFile,
+	}
+}
+
+func TestLoadConfigAcceptsJevBackendWithMinimalEnv(t *testing.T) {
+	clearTyprxEnv(t)
+	setEnv(t, jevWorkingEnv(t, ""))
+	cfg, err := loadConfig()
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if cfg.backendName != "jev" {
+		t.Errorf("expected backendName jev, got %s", cfg.backendName)
+	}
+	if cfg.jev == nil {
+		t.Fatal("expected a jev config to be populated")
+	}
+	if cfg.jev.url != defaultJevURL {
+		t.Errorf("expected the default url %s, got %s", defaultJevURL, cfg.jev.url)
+	}
+	if cfg.jev.model != defaultJevModel {
+		t.Errorf("expected the default model %s, got %s", defaultJevModel, cfg.jev.model)
+	}
+	if cfg.jev.priceInputPerMTok != 0 || cfg.jev.priceOutputPerMTok != 0 {
+		t.Errorf("expected both prices to default to 0 (unpriced), got in=%v out=%v",
+			cfg.jev.priceInputPerMTok, cfg.jev.priceOutputPerMTok)
+	}
+	if cfg.jev.key != "fake-jev-key-for-tests" {
+		t.Errorf("expected the trimmed key, got %q", cfg.jev.key)
+	}
+}
+
+func TestLoadConfigRequiresTheJevKeyFileForTheJevBackend(t *testing.T) {
+	clearTyprxEnv(t)
+	setEnv(t, map[string]string{"TYPRYX_BACKEND": "jev", "TYPRYX_TEMPLATES": validTemplatesDirForTest(t)})
+	_, err := loadConfig()
+	if err == nil || !strings.Contains(err.Error(), "TYPRYX_JEV_KEY_FILE") {
+		t.Fatalf("expected an error naming TYPRYX_JEV_KEY_FILE, got %v", err)
+	}
+	var cfgErr *configError
+	if !isConfigError(err, &cfgErr) {
+		t.Error("a missing required-when-chosen variable should be a configError (exit 2)")
+	}
+}
+
+func TestLoadConfigRejectsAnUnreadableJevKeyFile(t *testing.T) {
+	clearTyprxEnv(t)
+	env := jevWorkingEnv(t, filepath.Join(t.TempDir(), "does-not-exist.txt"))
+	setEnv(t, env)
+	_, err := loadConfig()
+	if err == nil || !strings.Contains(err.Error(), "TYPRYX_JEV_KEY_FILE") {
+		t.Fatalf("expected an error naming TYPRYX_JEV_KEY_FILE, got %v", err)
+	}
+}
+
+func TestLoadConfigRejectsAnEmptyJevKeyFile(t *testing.T) {
+	clearTyprxEnv(t)
+	dir := t.TempDir()
+	keyFile := filepath.Join(dir, "empty.txt")
+	if err := os.WriteFile(keyFile, []byte("   \n"), 0o600); err != nil {
+		t.Fatalf("writing empty key fixture: %v", err)
+	}
+	setEnv(t, jevWorkingEnv(t, keyFile))
+	_, err := loadConfig()
+	if err == nil || !strings.Contains(err.Error(), "TYPRYX_JEV_KEY_FILE") {
+		t.Fatalf("expected an error naming TYPRYX_JEV_KEY_FILE for an empty (whitespace-only) key, got %v", err)
+	}
+}
+
+func TestLoadConfigReadsTheJevKeyFileTrimmed(t *testing.T) {
+	clearTyprxEnv(t)
+	dir := t.TempDir()
+	keyFile := filepath.Join(dir, "key.txt")
+	if err := os.WriteFile(keyFile, []byte("  jev-secret-456\n"), 0o600); err != nil {
+		t.Fatalf("writing key file: %v", err)
+	}
+	setEnv(t, jevWorkingEnv(t, keyFile))
+	cfg, err := loadConfig()
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if cfg.jev.key != "jev-secret-456" {
+		t.Errorf("expected the trimmed key, got %q", cfg.jev.key)
+	}
+}
+
+func TestLoadConfigRejectsAMalformedJevURL(t *testing.T) {
+	cases := []struct{ name, url string }{
+		{"not absolute", "api.typesafe.ai/v1"},
+		{"wrong scheme", "ftp://api.typesafe.ai/v1"},
+		{"no host", "http:///v1"},
+		{"has a query string", "https://api.typesafe.ai/v1?x=1"},
+		{"has a fragment", "https://api.typesafe.ai/v1#frag"},
+		{"has userinfo", "https://user:pass@api.typesafe.ai/v1"},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			clearTyprxEnv(t)
+			env := jevWorkingEnv(t, "")
+			env["TYPRYX_JEV_URL"] = c.url
+			setEnv(t, env)
+			_, err := loadConfig()
+			if err == nil || !strings.Contains(err.Error(), "TYPRYX_JEV_URL") {
+				t.Fatalf("expected an error naming TYPRYX_JEV_URL for %q, got %v", c.url, err)
+			}
+		})
+	}
+}
+
+func TestLoadConfigAcceptsACustomJevURLAndModel(t *testing.T) {
+	clearTyprxEnv(t)
+	env := jevWorkingEnv(t, "")
+	env["TYPRYX_JEV_URL"] = "https://jev.example.com/v2"
+	env["TYPRYX_JEV_MODEL"] = "jev-1.13.0"
+	setEnv(t, env)
+	cfg, err := loadConfig()
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if cfg.jev.url != "https://jev.example.com/v2" {
+		t.Errorf("unexpected url: %s", cfg.jev.url)
+	}
+	if cfg.jev.model != "jev-1.13.0" {
+		t.Errorf("unexpected model: %s", cfg.jev.model)
+	}
+}
+
+func TestLoadConfigRejectsANegativeJevPrice(t *testing.T) {
+	for _, name := range []string{"TYPRYX_JEV_PRICE_PER_MTOK_INPUT", "TYPRYX_JEV_PRICE_PER_MTOK_OUTPUT"} {
+		t.Run(name, func(t *testing.T) {
+			clearTyprxEnv(t)
+			env := jevWorkingEnv(t, "")
+			env[name] = "-0.01"
+			setEnv(t, env)
+			_, err := loadConfig()
+			if err == nil || !strings.Contains(err.Error(), name) {
+				t.Fatalf("expected an error naming %s, got %v", name, err)
+			}
+		})
+	}
+}
+
+func TestLoadConfigRejectsAMalformedJevPrice(t *testing.T) {
+	clearTyprxEnv(t)
+	env := jevWorkingEnv(t, "")
+	env["TYPRYX_JEV_PRICE_PER_MTOK_INPUT"] = "expensive"
+	setEnv(t, env)
+	_, err := loadConfig()
+	if err == nil || !strings.Contains(err.Error(), "TYPRYX_JEV_PRICE_PER_MTOK_INPUT") {
+		t.Fatalf("expected an error naming TYPRYX_JEV_PRICE_PER_MTOK_INPUT, got %v", err)
+	}
+}
+
+func TestLoadConfigAcceptsConfiguredJevPrices(t *testing.T) {
+	clearTyprxEnv(t)
+	env := jevWorkingEnv(t, "")
+	env["TYPRYX_JEV_PRICE_PER_MTOK_INPUT"] = "0.042"
+	env["TYPRYX_JEV_PRICE_PER_MTOK_OUTPUT"] = "0.5"
+	setEnv(t, env)
+	cfg, err := loadConfig()
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if cfg.jev.priceInputPerMTok != 0.042 || cfg.jev.priceOutputPerMTok != 0.5 {
+		t.Errorf("unexpected prices: in=%v out=%v", cfg.jev.priceInputPerMTok, cfg.jev.priceOutputPerMTok)
+	}
+}
+
+func TestBuildRuntimeWiresTheJevBackendWhenChosen(t *testing.T) {
+	clearTyprxEnv(t)
+	setEnv(t, jevWorkingEnv(t, ""))
 	cfg, err := loadConfig()
 	if err != nil {
 		t.Fatalf("loadConfig: %v", err)
