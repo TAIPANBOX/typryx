@@ -106,6 +106,41 @@ func TestTruthyEnv(t *testing.T) {
 	}
 }
 
+func TestIdentitiesReturnsOnlyBoundIdentitiesNeverCredentials(t *testing.T) {
+	k := ParseKeys("cred1=agent://acme.example/bot,cred2,cred3=agent://acme.example/other")
+	ids := k.Identities()
+	if len(ids) != 2 {
+		t.Fatalf("expected 2 bound identities, got %d: %v", len(ids), ids)
+	}
+	for _, id := range ids {
+		if id == "cred1" || id == "cred2" || id == "cred3" {
+			t.Errorf("Identities returned a credential, not an identity: %q", id)
+		}
+	}
+}
+
+func TestIdentitiesOnKeysWithNoBoundIdentityIsEmpty(t *testing.T) {
+	k := ParseKeys("cred1,cred2")
+	if len(k.Identities()) != 0 {
+		t.Errorf("expected no bound identities, got %v", k.Identities())
+	}
+}
+
+func TestValidIdentity(t *testing.T) {
+	valid := []string{"agent://acme.example/bot", "agent://demo.example/tester", "agent://a/b"}
+	invalid := []string{"bob", "agent://", "agent://acme.example", "agent://acme.example/", "http://acme.example/bot", ""}
+	for _, id := range valid {
+		if !ValidIdentity(id) {
+			t.Errorf("expected %q to be a valid identity", id)
+		}
+	}
+	for _, id := range invalid {
+		if ValidIdentity(id) {
+			t.Errorf("expected %q to be rejected", id)
+		}
+	}
+}
+
 func TestAllowIsConstantTimeCompareNotMapLookup(t *testing.T) {
 	// Not a timing test (those are unreliable in CI); this only proves the
 	// comparison path is exercised for a near-miss, which is the case a

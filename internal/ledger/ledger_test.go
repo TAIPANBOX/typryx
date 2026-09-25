@@ -2,6 +2,7 @@ package ledger
 
 import (
 	"encoding/json"
+	"errors"
 	"math/rand"
 	"os"
 	"path/filepath"
@@ -77,6 +78,90 @@ func TestPutOutcomeWritesToOutcomesFile(t *testing.T) {
 	}
 	if len(b) == 0 {
 		t.Error("expected a line in outcomes.ndjson")
+	}
+}
+
+func TestPutOutcomeRefusesADuplicateAnswerID(t *testing.T) {
+	dir := t.TempDir()
+	l, err := Open(dir)
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	defer l.Close()
+	if err := l.PutOutcome(OutcomeRecord{AnswerID: "a1", Truth: json.RawMessage(`true`)}); err != nil {
+		t.Fatalf("first PutOutcome: %v", err)
+	}
+	if err := l.PutOutcome(OutcomeRecord{AnswerID: "a1", Truth: json.RawMessage(`false`)}); !errors.Is(err, ErrOutcomeExists) {
+		t.Fatalf("expected ErrOutcomeExists, got %v", err)
+	}
+}
+
+func TestOutcomeExistsIndexPersistsAcrossReopen(t *testing.T) {
+	dir := t.TempDir()
+	l1, err := Open(dir)
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	if err := l1.PutOutcome(OutcomeRecord{AnswerID: "a1", Truth: json.RawMessage(`true`)}); err != nil {
+		t.Fatalf("PutOutcome: %v", err)
+	}
+	if err := l1.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+
+	l2, err := Open(dir)
+	if err != nil {
+		t.Fatalf("reopen: %v", err)
+	}
+	defer l2.Close()
+	if err := l2.PutOutcome(OutcomeRecord{AnswerID: "a1", Truth: json.RawMessage(`false`)}); !errors.Is(err, ErrOutcomeExists) {
+		t.Fatalf("expected ErrOutcomeExists to survive a restart, got %v", err)
+	}
+}
+
+func TestATornOutcomesTailIsTruncatedAndSurvivesTheNextWrite(t *testing.T) {
+	dir := t.TempDir()
+	good, _ := json.Marshal(OutcomeRecord{AnswerID: "a1", Truth: json.RawMessage(`true`)})
+	content := string(good) + "\n" + `{"answer_id":"a2","tr` // torn, no trailing newline
+	if err := os.WriteFile(filepath.Join(dir, "outcomes.ndjson"), []byte(content), 0o644); err != nil {
+		t.Fatalf("writing fixture: %v", err)
+	}
+	l, err := Open(dir)
+	if err != nil {
+		t.Fatalf("Open should tolerate a torn outcomes tail: %v", err)
+	}
+	defer l.Close()
+	if l.TornBytes == 0 {
+		t.Error("expected TornBytes > 0")
+	}
+	if err := l.PutOutcome(OutcomeRecord{AnswerID: "a3", Truth: json.RawMessage(`true`)}); err != nil {
+		t.Fatalf("PutOutcome after a truncated torn tail: %v", err)
+	}
+	if err := l.PutOutcome(OutcomeRecord{AnswerID: "a1", Truth: json.RawMessage(`false`)}); !errors.Is(err, ErrOutcomeExists) {
+		t.Errorf("the outcome before the torn tail should still be indexed as existing, got %v", err)
+	}
+}
+
+func TestAMalformedOutcomesLineNotLastRefusesToOpen(t *testing.T) {
+	dir := t.TempDir()
+	good, _ := json.Marshal(OutcomeRecord{AnswerID: "a1"})
+	content := `{"answer_id":"broken middle line` + "\n" + string(good) + "\n"
+	if err := os.WriteFile(filepath.Join(dir, "outcomes.ndjson"), []byte(content), 0o644); err != nil {
+		t.Fatalf("writing fixture: %v", err)
+	}
+	if _, err := Open(dir); err == nil {
+		t.Fatal("expected Open to refuse when a non-last outcomes line is malformed")
+	}
+}
+
+func TestAnOutcomesLineWithNoAnswerIDRefusesToOpen(t *testing.T) {
+	dir := t.TempDir()
+	content := `{"truth":true}` + "\n"
+	if err := os.WriteFile(filepath.Join(dir, "outcomes.ndjson"), []byte(content), 0o644); err != nil {
+		t.Fatalf("writing fixture: %v", err)
+	}
+	if _, err := Open(dir); err == nil {
+		t.Fatal("expected Open to refuse an outcomes line with no answer_id")
 	}
 }
 
