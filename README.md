@@ -13,7 +13,7 @@ and recorded.
 ![Go 1.27](https://img.shields.io/badge/Go-1.27-4493f8)
 ![one direct dependency](https://img.shields.io/badge/direct%20dependency-one-2dd4bf)
 ![license Apache 2.0](https://img.shields.io/badge/license-Apache--2.0-9aa7b8)
-![tests](https://img.shields.io/badge/tests-806-brightgreen)
+![tests](https://img.shields.io/badge/tests-808-brightgreen)
 
 </div>
 
@@ -97,6 +97,36 @@ Measured 2026-09-25 on a development Mac (Apple Silicon, Docker Desktop): a loca
 wide default bind (`TYPRYX_ADDR=0.0.0.0:4320`), it refuses to start with exit 1, naming
 `TYPRYX_KEYS` and `TYPRYX_ALLOW_OPEN_BIND`: the open-bind refusal matrix working exactly
 as it does outside a container.
+
+## Where your data goes
+
+`TYPRYX_BACKEND` is required, with no default, so a data mode is never chosen by
+accident. There are three:
+
+- **Without typryx.** The rest of the stack runs exactly as it did before typryx was
+  added; nothing here changes anything.
+- **typryx with a local model** (`TYPRYX_BACKEND=openai-logprobs`, pointed at a model
+  server in your own infrastructure, for example Ollama or vLLM on your own machines).
+  No data leaves that infrastructure. Measured this way 2026-09-25, against a local
+  Ollama serving `qwen2.5:3b` and `qwen2.5:7b`; see [Local model
+  backend](#local-model-backend).
+- **typryx with a hosted model** (`openai-logprobs` pointed at a hosted
+  OpenAI-compatible API, or `jev`). Only the fields a template's `fields` names leave
+  the box, to a named third party that processes them under its own terms;
+  `held_back_fields` in every answer counts what did not leave, and the record keeps a
+  SHA-384 of what did, never the data itself. Choosing a hosted backend adds a data
+  processor to your stack, with its own jurisdiction, retention, and agreement; for a
+  regulated organisation, that choice belongs to its compliance function, not to
+  whoever sets an environment variable. **TypeSafe's data-handling terms for Jev have
+  not been read or verified by this project.** An operator must read them before
+  setting `TYPRYX_BACKEND=jev`; see [Jev backend](#jev-backend) and [What it will not
+  do](#what-it-will-not-do).
+- **`TYPRYX_BACKEND=stub`** sends nothing anywhere: deterministic, free, and only for
+  tests and demos.
+
+The example templates in `examples/templates` name only the minimum fields a judge
+needs, never a field that identifies a person or a customer; `scripts/templates-load.sh`
+gates that in CI and on every push (CLAUDE.md invariant 28).
 
 ## Connect it
 
@@ -508,12 +538,23 @@ One JSON file per template, in the directory named by `TYPRYX_TEMPLATES`:
 - `max_state_bytes`: defaults to 16384, capped at 1048576.
 - The version is the lowercase hex SHA-256 of the template's own canonical JSON.
 
-`examples/templates/` holds three: `eval.outcome_met` (noul), `eval.answer_quality`
-(score, four levels), and `request.complexity` (choice: cheap, default, hard,
-reasoning, matching tokenfuse's router task classes).
+`examples/templates/` holds four: `eval.outcome_met` (noul), `eval.answer_quality`
+(score, four levels), `request.complexity` (choice: cheap, default, hard,
+reasoning, matching tokenfuse's router task classes), and `triage.anomaly_class`
+(choice: expected_growth, runaway_agent, misconfiguration, price_change, unknown, for
+triaging a cost or usage anomaly). Every one of them names only the fields a judge
+needs, never a field that identifies a person or a customer; `scripts/templates-load.sh`
+gates that (see [Where your data goes](#where-your-data-goes)).
 
 ```sh
 typryx templates check examples/templates
+```
+
+```
+eval.answer_quality c953e7fbd1c21dccd07740b478de76511ee3dd3ff97902ee4b5042d90cf55292
+eval.outcome_met 2d3ecbdc88d71358c281ba2163f056bc56559beff4af6a4d937cd6a66f0f732d
+request.complexity b277fb084288c5334ea884df013c9364457807afb3121469c93fb8244c25534d
+triage.anomaly_class 6b4497aec4a78b57c2b0e0b0481faa07e34eb0b7aa8297d45c6f12f4d12d4618
 ```
 
 ## Configuration
@@ -578,10 +619,11 @@ go build ./...
 ./scripts/readme-numbers.sh
 ./scripts/one-way-out.sh
 ./scripts/no-secrets.sh
+./scripts/templates-load.sh
 ./scripts/gates-have-teeth.sh
 ```
 
-299 tests. `go test ./... -race` covers every package; `internal/manifest` builds and
+301 tests. `go test ./... -race` covers every package; `internal/manifest` builds and
 starts the real binary to prove `components.json` against what it actually does; CI's
 `image` job builds the Dockerfile on every push and pull request, pushing nowhere.
 
@@ -603,7 +645,7 @@ its retry loop and `answerFrom`'s unknown-type case, both guarded ahead of them 
 loop, proved by starting the real binary in `internal/manifest` and by process-level
 tests in `cmd/typryx/main_test.go` rather than by in-process instrumentation.
 
-`scripts/gates-have-teeth.sh` plants 14 faults, one per gate behaviour, and requires
+`scripts/gates-have-teeth.sh` plants 18 faults, one per gate behaviour, and requires
 each gate to fail on its own fault and pass on what it must not catch. Eleven defects
 were found in a whole-file review on 2026-09-25 and fixed red-first (see CLAUDE.md for
 the mutants each fix's test catches); a twelfth, the `required: null` schema defect
