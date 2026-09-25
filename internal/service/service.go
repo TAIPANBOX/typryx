@@ -217,11 +217,22 @@ func (s *Service) askFreeform(ctx context.Context, caller Caller, req AskRequest
 		Type:         template.Type(q.Type),
 		Instructions: q.Instructions,
 		Criteria:     q.Criteria,
+		// A freeform question sends the whole state (NewFreeformEgress
+		// below ignores Fields entirely); this only satisfies
+		// Template.Validate()'s non-empty requirement.
+		Fields: []string{"*"},
 	}
-	switch tmpl.Type {
-	case template.TypeChoice, template.TypeScore, template.TypeNoul:
-	default:
-		return Result{}, refusal("bad_request", 400, "question type %q is not one of choice, score, noul", q.Type)
+	// Validate the question's own shape (instructions, criteria) and build
+	// the backend Question BEFORE the cap is taken and before the state is
+	// even looked at: a caller sending malformed freeform questions must
+	// not be able to spend the deployment's real hourly budget for free,
+	// and every refusal, this one included, reaches the journal.
+	if err := tmpl.Validate(); err != nil {
+		return s.badQuestion(caller, req, tmpl.ID, err)
+	}
+	question, keys, err := questionFor(tmpl)
+	if err != nil {
+		return s.badQuestion(caller, req, tmpl.ID, err)
 	}
 	// The whole state is sent for a freeform question: there is no template
 	// to name a field allowlist, and the operator switched this on knowingly.
@@ -232,7 +243,19 @@ func (s *Service) askFreeform(ctx context.Context, caller Caller, req AskRequest
 	// version = digest of the question itself, since there is no file on
 	// disk to version.
 	version := freeformVersion(q)
-	return s.ask(ctx, caller, req, tmpl, version, eg, 0)
+	return s.ask(ctx, caller, req, tmpl, version, eg, 0, question, keys)
+}
+
+// badQuestion refuses a template whose shape does not parse into an askable
+// question: instructions, criteria, or the type itself. In practice this is
+// the freeform path; a template loaded through template.LoadDir was already
+// Validate()'d before it ever reached the registry, so askTemplate's own
+// call to this is defensive rather than reachable in normal operation.
+func (s *Service) badQuestion(caller Caller, req AskRequest, templateID string, err error) (Result, *Refusal) {
+	s.Journal.Refused(caller.AgentID, req.RunID, record.RefusedData{
+		Template: templateID, Reason: "bad_question",
+	})
+	return Result{}, refusal("bad_question", 400, "%s", err.Error())
 }
 
 func freeformVersion(q *FreeformQuestion) string {
@@ -261,7 +284,15 @@ func (s *Service) askTemplate(ctx context.Context, caller Caller, req AskRequest
 	if err != nil {
 		return s.badState(caller, req, tmpl.ID, tmpl.Version(), err)
 	}
-	return s.ask(ctx, caller, req, tmpl, tmpl.Version(), eg, heldBack)
+	// A template loaded through template.LoadDir was already Validate()'d,
+	// so questionFor here should never fail; it is still called before the
+	// cap for the same reason the freeform path is: nothing that reaches
+	// the backend consumes the cap ahead of being fully validated.
+	question, keys, err := questionFor(tmpl)
+	if err != nil {
+		return s.badQuestion(caller, req, tmpl.ID, err)
+	}
+	return s.ask(ctx, caller, req, tmpl, tmpl.Version(), eg, heldBack, question, keys)
 }
 
 func (s *Service) badState(caller Caller, req AskRequest, templateID, version string, err error) (Result, *Refusal) {
@@ -284,21 +315,19 @@ func asStateTooLarge(err error, target **template.StateTooLargeError) bool {
 	return false
 }
 
-// ask is the common tail once a template (real or freeform) and its egress
-// are known: cap, backend call under timeout, probability validation,
-// ledger, journal.
-func (s *Service) ask(ctx context.Context, caller Caller, req AskRequest, tmpl template.Template, version string, eg template.Egress, heldBack int) (Result, *Refusal) {
+// ask is the common tail once a template (real or freeform), its egress and
+// its already-validated Question/keys are known: cap, backend call under
+// timeout, probability validation, ledger, journal. The caller (askTemplate
+// or askFreeform) has already called questionFor and handled its error, so
+// nothing here can fail for a reason that should have been caught before the
+// cap was taken.
+func (s *Service) ask(ctx context.Context, caller Caller, req AskRequest, tmpl template.Template, version string, eg template.Egress, heldBack int, q backend.Question, keys []string) (Result, *Refusal) {
 	if s.Cap != nil && !s.Cap.take() {
 		s.Journal.Refused(caller.AgentID, req.RunID, record.RefusedData{
 			Template: tmpl.ID, TemplateVersion: version, Reason: "over_hourly_cap",
 		})
 		return Result{}, refusal("over_hourly_cap", 429,
 			"this deployment's hourly call cap is spent")
-	}
-
-	q, keys, err := questionFor(tmpl)
-	if err != nil {
-		return Result{}, refusal("bad_request", 400, "%s", err.Error())
 	}
 
 	answerID := s.newID()

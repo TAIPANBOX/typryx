@@ -583,8 +583,8 @@ func TestFreeformRejectsAnUnknownQuestionType(t *testing.T) {
 	d.Service.AllowFreeform = true
 	_, refusal := d.Service.Ask(context.Background(), service.Caller{AgentID: "agent://acme.example/bot"},
 		service.AskRequest{State: json.RawMessage(`{}`), Question: &service.FreeformQuestion{Type: "essay", Instructions: "x"}})
-	if refusal == nil || refusal.Code != "bad_request" {
-		t.Fatalf("expected bad_request for an unknown freeform type, got %+v", refusal)
+	if refusal == nil || refusal.Code != "bad_question" {
+		t.Fatalf("expected bad_question for an unknown freeform type, got %+v", refusal)
 	}
 }
 
@@ -654,6 +654,50 @@ func TestFreeformBadStateIsRefused(t *testing.T) {
 	}
 }
 
+// @test:TestABadFreeformQuestionIsRefusedBeforeTheCapAndRecorded
+//
+// A freeform question with bad criteria or instructions must be refused
+// BEFORE the hourly cap is taken (a caller sending malformed freeform
+// questions must not be able to burn the deployment's real capacity for
+// free) and the refusal must still reach the journal, exactly like any
+// other refusal.
+func TestABadFreeformQuestionIsRefusedBeforeTheCapAndRecorded(t *testing.T) {
+	d := newService(t, noulTemplate("task"), backend.Stub{})
+	d.Service.AllowFreeform = true
+	d.Service.Cap = service.NewCap(1)
+	caller := service.Caller{AgentID: "a"}
+
+	_, refusal := d.Service.Ask(context.Background(), caller,
+		service.AskRequest{
+			State: json.RawMessage(`{}`),
+			Question: &service.FreeformQuestion{
+				Type: "choice", Instructions: "pick one", Criteria: json.RawMessage(`["not", "an", "object"]`),
+			},
+		})
+	if refusal == nil || refusal.Code != "bad_question" || refusal.HTTPStatus != 400 {
+		t.Fatalf("expected bad_question/400, got %+v", refusal)
+	}
+
+	// The cap's one slot must still be free: the bad question above must
+	// never have reached cap.take().
+	_, refusal = d.Service.Ask(context.Background(), caller,
+		service.AskRequest{Template: "eval.outcome_met", State: json.RawMessage(`{"task":"t"}`)})
+	if refusal != nil {
+		t.Fatalf("the cap's slot was consumed by a bad freeform question that never reached it: %+v", refusal)
+	}
+
+	events := readEvents(t, d.JournalPath)
+	found := false
+	for _, e := range events {
+		if e.Type == "typed_refused" && e.Data["reason"] == "bad_question" {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("expected a typed_refused event with reason bad_question, got %+v", events)
+	}
+}
+
 func TestFreeformWithMalformedChoiceCriteriaIsRefused(t *testing.T) {
 	d := newService(t, noulTemplate("task"), backend.Stub{})
 	d.Service.AllowFreeform = true
@@ -664,8 +708,8 @@ func TestFreeformWithMalformedChoiceCriteriaIsRefused(t *testing.T) {
 				Type: "choice", Instructions: "pick one", Criteria: json.RawMessage(`["not", "an", "object"]`),
 			},
 		})
-	if refusal == nil || refusal.Code != "bad_request" {
-		t.Fatalf("expected bad_request for malformed freeform choice criteria, got %+v", refusal)
+	if refusal == nil || refusal.Code != "bad_question" {
+		t.Fatalf("expected bad_question for malformed freeform choice criteria, got %+v", refusal)
 	}
 }
 
@@ -679,8 +723,8 @@ func TestFreeformWithMalformedScoreCriteriaIsRefused(t *testing.T) {
 				Type: "score", Instructions: "rate it", Criteria: json.RawMessage(`{"not":"an array"}`),
 			},
 		})
-	if refusal == nil || refusal.Code != "bad_request" {
-		t.Fatalf("expected bad_request for malformed freeform score criteria, got %+v", refusal)
+	if refusal == nil || refusal.Code != "bad_question" {
+		t.Fatalf("expected bad_question for malformed freeform score criteria, got %+v", refusal)
 	}
 }
 
