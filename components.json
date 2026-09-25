@@ -11,7 +11,7 @@
   ],
   "schema": "taipanbox.dev/components/v1",
   "repo": "TAIPANBOX/typryx",
-  "distribution": "not distributed: built from source, no tag yet",
+  "distribution": "ghcr.io/taipanbox/typryx, per tag (v0.1.0 first, 2026-09-25)",
   "components": [
     {
       "name": "typryx",

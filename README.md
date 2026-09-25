@@ -61,10 +61,10 @@ No claim here is about how fast, cheap, or accurate any vendor's model is; see
 
 ## Install
 
-With Go 1.27 (there is no tagged release yet, so this builds `main`):
+With Go 1.27:
 
 ```sh
-go install github.com/TAIPANBOX/typryx/cmd/typryx@main
+go install github.com/TAIPANBOX/typryx/cmd/typryx@v0.1.0
 ```
 
 Or from a clone, which also gives you the example templates:
@@ -75,21 +75,28 @@ go build ./cmd/typryx
 ./typryx templates check examples/templates
 ```
 
-Or with Docker:
+Or with Docker, from the published image (linux/amd64 and linux/arm64, signed by
+digest with keyless cosign, build provenance attested; no `latest` tag, pin the version):
 
 ```sh
-docker build -t typryx:dev .
 docker run --rm -p 4320:4320 \
   -e TYPRYX_BACKEND=stub -e TYPRYX_KEYS='k1=agent://demo.example/tester' \
-  typryx:dev
+  ghcr.io/taipanbox/typryx:v0.1.0
 ```
 
-Measured 2026-09-25 on a development Mac (Apple Silicon, Docker Desktop): the image builds to **15.7 MB**; with
+Measured 2026-09-25, pulled anonymously on a development Mac (Apple Silicon): the
+published `v0.1.0` image is **16.6 MB**, reports `version=v0.1.0`, answers `/healthz` and a
+real `POST /v1/ask` (`held_back_fields: 1` for an extra `user_email`), and with
+`TYPRYX_BACKEND=stub` alone refuses to start with exit 1.
+
+To build it yourself instead: `docker build -t typryx:dev .`
+
+Measured 2026-09-25 on a development Mac (Apple Silicon, Docker Desktop): a local `typryx:dev` build is **15.7 MB**; with
 `TYPRYX_BACKEND=stub` and `TYPRYX_KEYS` set it answers `/healthz` and a real
 `POST /v1/ask`; run with `TYPRYX_BACKEND=stub` alone, no keys, against the image's own
 wide default bind (`TYPRYX_ADDR=0.0.0.0:4320`), it refuses to start with exit 1, naming
 `TYPRYX_KEYS` and `TYPRYX_ALLOW_OPEN_BIND`: the open-bind refusal matrix working exactly
-as it does outside a container. There is no published image or tag.
+as it does outside a container.
 
 ## Connect it
 
@@ -646,8 +653,6 @@ repository, and is now covered.
   entry yet.
 - **Not registered in the agent-passport SPEC.** The event types and schema version used
   here are not yet a numbered section of that document.
-- **No published image or tag.** The Dockerfile is built and run locally and by CI on
-  every push; nothing is pushed to a registry.
 - **The manifest test and the Docker and tokenfuse runs prove behavior on one development Mac,
   on these commits; they are not a claim about any other environment.**
 
