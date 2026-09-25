@@ -146,9 +146,21 @@ func loadConfig() (*config, error) {
 	if err != nil {
 		return nil, err
 	}
+	// 0 is the one explicit, documented uncapped opt-out; anything negative
+	// is not "uncapped" spelled differently, it is a value nobody chose on
+	// purpose, and silently treating it as uncapped would spend without a
+	// decision behind it.
+	if maxCallsPerHour < 0 {
+		return nil, badVar("TYPRYX_MAX_CALLS_PER_HOUR", strconv.FormatInt(maxCallsPerHour, 10),
+			"must be 0 (the explicit uncapped opt-out) or a positive whole number")
+	}
 	timeoutMS, err := envInt("TYPRYX_TIMEOUT_MS", defaultTimeoutMS)
 	if err != nil {
 		return nil, err
+	}
+	if timeoutMS <= 0 {
+		return nil, badVar("TYPRYX_TIMEOUT_MS", strconv.FormatInt(timeoutMS, 10),
+			"must be a positive whole number of milliseconds; there is no uncapped-deadline opt-out")
 	}
 
 	addr := envOr("TYPRYX_ADDR", defaultAddr)

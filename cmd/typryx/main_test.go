@@ -235,6 +235,60 @@ func TestLoadConfigRejectsAMalformedTimeout(t *testing.T) {
 	}
 }
 
+// @test:TestANegativeCapRefusesToStart
+//
+// A negative TYPRYX_MAX_CALLS_PER_HOUR is not "uncapped", it is a typo away
+// from one that silently means the same thing as 0 in some other reader's
+// head; refuse it outright rather than guess. 0 stays the one explicit,
+// documented uncapped opt-out.
+func TestANegativeCapRefusesToStart(t *testing.T) {
+	clearTyprxEnv(t)
+	setEnv(t, map[string]string{
+		"TYPRYX_BACKEND": "stub", "TYPRYX_TEMPLATES": validTemplatesDirForTest(t),
+		"TYPRYX_MAX_CALLS_PER_HOUR": "-1",
+	})
+	_, err := loadConfig()
+	if err == nil || !strings.Contains(err.Error(), "TYPRYX_MAX_CALLS_PER_HOUR") {
+		t.Fatalf("expected an error naming TYPRYX_MAX_CALLS_PER_HOUR, got %v", err)
+	}
+}
+
+func TestZeroCapIsStillTheExplicitUncappedOptOut(t *testing.T) {
+	clearTyprxEnv(t)
+	setEnv(t, map[string]string{
+		"TYPRYX_BACKEND": "stub", "TYPRYX_TEMPLATES": validTemplatesDirForTest(t),
+		"TYPRYX_MAX_CALLS_PER_HOUR": "0",
+	})
+	cfg, err := loadConfig()
+	if err != nil {
+		t.Fatalf("0 must still be accepted as the uncapped opt-out: %v", err)
+	}
+	if cfg.maxCallsPerHour != 0 {
+		t.Errorf("expected 0, got %d", cfg.maxCallsPerHour)
+	}
+}
+
+// @test:TestANonPositiveTimeoutRefusesToStart
+//
+// TYPRYX_TIMEOUT_MS <= 0 silently became the 2s default; a backend deadline
+// of zero or less is nonsensical and must be refused by name, not quietly
+// replaced.
+func TestANonPositiveTimeoutRefusesToStart(t *testing.T) {
+	for _, v := range []string{"0", "-5"} {
+		t.Run(v, func(t *testing.T) {
+			clearTyprxEnv(t)
+			setEnv(t, map[string]string{
+				"TYPRYX_BACKEND": "stub", "TYPRYX_TEMPLATES": validTemplatesDirForTest(t),
+				"TYPRYX_TIMEOUT_MS": v,
+			})
+			_, err := loadConfig()
+			if err == nil || !strings.Contains(err.Error(), "TYPRYX_TIMEOUT_MS") {
+				t.Fatalf("expected an error naming TYPRYX_TIMEOUT_MS, got %v", err)
+			}
+		})
+	}
+}
+
 func TestLoadConfigRefusesAnOpenBindWithNoCredential(t *testing.T) {
 	clearTyprxEnv(t)
 	setEnv(t, map[string]string{
