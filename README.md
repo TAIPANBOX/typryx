@@ -377,6 +377,43 @@ go run ./examples/calibration -url http://127.0.0.1:4320 -key k1 -n 60 -seed 1
 /tmp/typryx calibration --ledger /tmp/cal-3b --min-n 30
 ```
 
+### Hosted models, and what one token can and cannot judge (measured 2026-09-25)
+
+The same 60 items (seed 1), through the same `openai-logprobs` backend pointed at
+`https://api.openai.com/v1`, with the example template (v1, `2d3ecbdc`) and with a v2
+whose instructions ask plainly whether the answer is exactly correct (`781efaaf`, same
+id, so calibration keeps the two versions apart):
+
+| model | template | accuracy | mean confidence | overconfidence | Brier | ECE |
+|---|---|---|---|---|---|---|
+| gpt-4.1-mini-2025-04-14 | v1 | 0.733 | 0.990 | 0.257 | 0.525 | 0.267 |
+| gpt-4.1-mini-2025-04-14 | v2 | 0.733 | 0.958 | 0.225 | 0.505 | 0.243 |
+| gpt-4o-mini-2024-07-18 | v1 | 0.583 | 0.987 | 0.404 | 0.823 | 0.414 |
+| gpt-4o-mini-2024-07-18 | v2 | 0.633 | 0.983 | 0.349 | 0.716 | 0.358 |
+| gpt-4.1-nano-2025-04-14 | v1 | 0.500 | 1.000 | 0.500 | 1.000 | 0.500 |
+| gpt-4.1-nano-2025-04-14 | v2 | 0.500 | 1.000 | 0.500 | 0.999 | 0.500 |
+| qwen2.5:7b (local) | v2 | 0.667 | 0.965 | 0.298 | 0.597 | 0.298 |
+| qwen2.5:3b (local) | v2 | 0.500 | 0.998 | 0.498 | 0.995 | 0.498 |
+
+Three things this shows, each read off the ledgers rather than assumed:
+
+- **The errors are leniency.** gpt-4.1-mini called 15 of the 30 wrong answers correct
+  and 1 of the 30 right ones wrong; gpt-4.1-nano called every item correct.
+- **Rewording the question barely moved it**, so the template was not the main cause.
+  The backend asks for one token, because the probability is read from that token, and
+  one token leaves no room to compute `17 x 13` before answering. A one-token judge is
+  a fit for classification (which team, how complex a request) and a poor fit for
+  checking anything that needs working out. Typed-decision models such as Jev are
+  built for exactly the second kind; this is the comparison that matters once there
+  is access (signups were paused on 2026-09-25).
+- **Current hosted models do not expose token probabilities at all.** gpt-5.x and
+  gpt-6 answer `'logprobs' is not supported with this model` (probed 2026-09-25), so
+  this backend reaches only earlier hosted models and open models. It does not reach
+  Anthropic's API either, which, as far as this repository knows, returns no logprobs.
+
+Cost of all six hosted runs together: under one US cent (about 360 calls of about 200
+input tokens and 1 output token each).
+
 ![A reliability diagram: the diagonal is perfect calibration, and qwen2.5:3b and qwen2.5:7b's measured bins both sit well below it, meaning both models are confident far more often than they are right](docs/calibration.svg)
 
 ## What leaves the box
