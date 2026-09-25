@@ -9,6 +9,7 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"math"
 	"strconv"
@@ -499,6 +500,10 @@ func (s *Service) Outcome(caller Caller, req OutcomeRequest) (OutcomeResult, *Re
 		RecordedAt: s.clock().UTC().Format(time.RFC3339Nano),
 	}
 	if err := s.Ledger.PutOutcome(rec); err != nil {
+		if errors.Is(err, ledger.ErrOutcomeExists) {
+			return OutcomeResult{}, refusal("outcome_exists", 409,
+				"an outcome is already recorded for answer %q; a truth is counted once", req.AnswerID)
+		}
 		return OutcomeResult{}, refusal("ledger_write_failed", 500, "%s", err.Error())
 	}
 	return OutcomeResult{AnswerID: req.AnswerID, Template: ans.Template, TemplateVersion: ans.TemplateVersion}, nil

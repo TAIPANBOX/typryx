@@ -249,6 +249,9 @@ func (l *Ledger) PutAnswer(rec AnswerRecord) error {
 }
 
 // PutOutcome appends an outcome record.
+// PutOutcome appends an outcome record, refusing ErrOutcomeExists if one is
+// already recorded for rec.AnswerID: a truth is counted once, and the check
+// is against the index built at Open, so it holds across a restart.
 func (l *Ledger) PutOutcome(rec OutcomeRecord) error {
 	b, err := json.Marshal(rec)
 	if err != nil {
@@ -256,10 +259,17 @@ func (l *Ledger) PutOutcome(rec OutcomeRecord) error {
 	}
 	l.mu.Lock()
 	defer l.mu.Unlock()
+	if l.outcomeExists[rec.AnswerID] {
+		return ErrOutcomeExists
+	}
 	if _, err := l.outcomesFile.Write(append(b, '\n')); err != nil {
 		return fmt.Errorf("ledger: writing outcome record: %w", err)
 	}
-	return l.outcomesFile.Sync()
+	if err := l.outcomesFile.Sync(); err != nil {
+		return fmt.Errorf("ledger: syncing outcomes file: %w", err)
+	}
+	l.outcomeExists[rec.AnswerID] = true
+	return nil
 }
 
 // GetAnswer looks an answer up by id.

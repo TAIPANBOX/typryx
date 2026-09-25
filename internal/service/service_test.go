@@ -9,6 +9,7 @@ import (
 
 	"github.com/TAIPANBOX/typryx/internal/backend"
 	"github.com/TAIPANBOX/typryx/internal/backend/backendtest"
+	"github.com/TAIPANBOX/typryx/internal/ledger"
 	"github.com/TAIPANBOX/typryx/internal/service"
 	"github.com/TAIPANBOX/typryx/internal/template"
 )
@@ -701,6 +702,61 @@ func TestOutcomeSurfacesALedgerWriteFailure(t *testing.T) {
 		service.OutcomeRequest{AnswerID: result.AnswerID, Truth: json.RawMessage(`true`), Source: "human"})
 	if refusal == nil || refusal.Code != "ledger_write_failed" || refusal.HTTPStatus != 500 {
 		t.Fatalf("expected ledger_write_failed/500 once the ledger file is closed, got %+v", refusal)
+	}
+}
+
+// @test:TestASecondOutcomeForTheSameAnswerIsRefused
+//
+// A truth is counted once. A second POST /v1/outcome for an answer that
+// already has one must be refused, and the refusal must hold even after the
+// ledger has been closed and reopened (the index that remembers "this answer
+// already has an outcome" has to survive a restart, not just live in memory
+// for the current process).
+func TestASecondOutcomeForTheSameAnswerIsRefused(t *testing.T) {
+	tb := &backendtest.Backend{Mode: backendtest.ModeOK, Answer: backend.Answer{
+		Probabilities: map[string]float64{"true": 0.5, "false": 0.5}, Model: "test-0",
+	}}
+	ledgerDir := t.TempDir()
+	led, err := ledger.Open(ledgerDir)
+	if err != nil {
+		t.Fatalf("ledger.Open: %v", err)
+	}
+	d := newService(t, noulTemplate("task"), tb)
+	d.Service.Ledger = led
+
+	result, refusal := d.Service.Ask(context.Background(), service.Caller{AgentID: "a"},
+		service.AskRequest{Template: "eval.outcome_met", State: json.RawMessage(`{"task":"t"}`)})
+	if refusal != nil {
+		t.Fatalf("unexpected refusal: %+v", refusal)
+	}
+
+	_, refusal = d.Service.Outcome(service.Caller{AgentID: "a"},
+		service.OutcomeRequest{AnswerID: result.AnswerID, Truth: json.RawMessage(`true`), Source: "human"})
+	if refusal != nil {
+		t.Fatalf("the first outcome should be accepted: %+v", refusal)
+	}
+
+	_, refusal = d.Service.Outcome(service.Caller{AgentID: "a"},
+		service.OutcomeRequest{AnswerID: result.AnswerID, Truth: json.RawMessage(`false`), Source: "human"})
+	if refusal == nil || refusal.Code != "outcome_exists" || refusal.HTTPStatus != 409 {
+		t.Fatalf("expected outcome_exists/409 for a second outcome, got %+v", refusal)
+	}
+
+	// Across a restart: close and reopen the ledger, rebuild the service on
+	// top of the reopened one, and confirm a second outcome is still refused.
+	if err := led.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+	led2, err := ledger.Open(ledgerDir)
+	if err != nil {
+		t.Fatalf("reopening the ledger: %v", err)
+	}
+	defer led2.Close()
+	d.Service.Ledger = led2
+	_, refusal = d.Service.Outcome(service.Caller{AgentID: "a"},
+		service.OutcomeRequest{AnswerID: result.AnswerID, Truth: json.RawMessage(`false`), Source: "human"})
+	if refusal == nil || refusal.Code != "outcome_exists" {
+		t.Fatalf("expected outcome_exists to survive a restart, got %+v", refusal)
 	}
 }
 
