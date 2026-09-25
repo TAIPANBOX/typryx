@@ -95,3 +95,23 @@ Feature: Typed answers, as an option a customer adds to the stack
     Given the component manifest
     When the binary is built and started
     Then every variable it reads is declared, and every declared one is read
+
+  # @test:TestTheAnswerIsDerivedFromTheProbabilitiesNotTakenFromTheBackend
+  Scenario: The answer comes from the probabilities, not from what the backend claims
+    Given a backend that returns a valid probability distribution
+    And the same backend also claims a different answer outright
+    When a question is asked
+    Then the answer served is the one the probabilities actually point to
+
+  # @test:TestAnAnswerWrittenAfterATornLineSurvivesTheNextRestart
+  Scenario: An answer written after a crash is still there after the next restart
+    Given a ledger whose last line was cut short by a crash
+    When the service starts again and answers a new question
+    Then the earlier, complete answer is still on record
+    And the new answer is written cleanly, not merged with the wreckage
+
+  # @test:TestASecondOutcomeForTheSameAnswerIsRefused
+  Scenario: A truth is counted once
+    Given an answer that already has a recorded outcome
+    When another outcome arrives for that same answer
+    Then it is refused, even after the service has restarted

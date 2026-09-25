@@ -318,7 +318,7 @@ func (s *Service) ask(ctx context.Context, caller Caller, req AskRequest, tmpl t
 		return unansweredResult(answerID, tmpl.ID, version, string(tmpl.Type), heldBack, latency, code), nil
 	}
 
-	answerValue := answerValueFor(tmpl.Type, ans)
+	answerValue := deriveAnswer(tmpl.Type, keys, ans.Probabilities)
 
 	if s.Ledger != nil {
 		rec := ledger.AnswerRecord{
@@ -370,16 +370,46 @@ func unansweredResult(answerID, tmplID, version, typ string, heldBack int, laten
 	}
 }
 
-func answerValueFor(t template.Type, ans backend.Answer) any {
+// deriveAnswer computes the served answer from the ALREADY-VALIDATED
+// probability distribution, never from the backend's own Choice/Score/Yes
+// fields (backend.Answer documents those as advisory and unread, exactly
+// because of this function). keys is in the same order questionFor built it
+// in: sorted option names for choice, "0".."n-1" for score. Ties are broken
+// towards the first key in that order, which is the lowest sorted option
+// name for choice and the lower index for score.
+func deriveAnswer(t template.Type, keys []string, probs map[string]float64) any {
 	switch t {
 	case template.TypeChoice:
-		return ans.Choice
+		return keys[argmaxIndexOf(keys, probs)]
 	case template.TypeScore:
-		return ans.Score
+		i := argmaxIndexOf(keys, probs)
+		n, err := strconv.Atoi(keys[i])
+		if err != nil {
+			// keys for a score template are always produced by questionFor
+			// as strconv.Itoa(i); a value that does not parse back means
+			// questionFor's own contract broke, not a runtime input.
+			panic("service: score key did not parse as an integer: " + keys[i])
+		}
+		return n
 	case template.TypeNoul:
-		return ans.Yes
+		return probs["true"]
 	}
 	return nil
+}
+
+// argmaxIndexOf returns the index into keys of the highest probability,
+// ties broken towards the lower index (the first one encountered, since the
+// comparison is strict).
+func argmaxIndexOf(keys []string, probs map[string]float64) int {
+	best := 0
+	bestP := -1.0
+	for i, k := range keys {
+		if p := probs[k]; p > bestP {
+			bestP = p
+			best = i
+		}
+	}
+	return best
 }
 
 // questionFor builds the backend.Question for a template and returns the

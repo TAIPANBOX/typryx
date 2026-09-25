@@ -69,6 +69,72 @@ func TestAChoiceQuestionIsAnsweredWithAProbabilityForEveryOption(t *testing.T) {
 	}
 }
 
+// @test:TestTheAnswerIsDerivedFromTheProbabilitiesNotTakenFromTheBackend
+//
+// A backend's own Choice/Score/Yes fields are advisory only and must never
+// be trusted: the service derives the answer from the probability
+// distribution itself, the same distribution it already validated. A
+// backend that returns a nonsensical Choice, an out-of-range Score, or a Yes
+// that disagrees with its own probabilities must never have that leak into
+// the served answer.
+func TestTheAnswerIsDerivedFromTheProbabilitiesNotTakenFromTheBackend(t *testing.T) {
+	t.Run("choice", func(t *testing.T) {
+		tb := &backendtest.Backend{Mode: backendtest.ModeOK, Answer: backend.Answer{
+			Choice:        "banana", // not one of the template's options at all
+			Probabilities: map[string]float64{"cheap": 0.1, "default": 0.2, "hard": 0.7},
+			Model:         "test-0",
+		}}
+		d := newService(t, choiceTemplate(), tb)
+		result, refusal := d.Service.Ask(context.Background(),
+			service.Caller{AgentID: "a"},
+			service.AskRequest{Template: "request.complexity", State: json.RawMessage(`{"prompt":"x"}`)})
+		if refusal != nil {
+			t.Fatalf("unexpected refusal: %+v", refusal)
+		}
+		if result.Answer != "hard" {
+			t.Errorf("expected the derived answer 'hard' (the argmax of the probabilities), got %#v (the backend's claimed Choice was 'banana')", result.Answer)
+		}
+	})
+
+	t.Run("score", func(t *testing.T) {
+		tb := &backendtest.Backend{Mode: backendtest.ModeOK, Answer: backend.Answer{
+			Score:         7, // out of range for a 4-level template
+			Probabilities: map[string]float64{"0": 0.6, "1": 0.2, "2": 0.1, "3": 0.1},
+			Model:         "test-0",
+		}}
+		tmpl := template.Template{ID: "s", Type: template.TypeScore, Instructions: "x",
+			Criteria: json.RawMessage(`["l0","l1","l2","l3"]`), Fields: []string{"x"}}
+		d := newService(t, tmpl, tb)
+		result, refusal := d.Service.Ask(context.Background(),
+			service.Caller{AgentID: "a"},
+			service.AskRequest{Template: "s", State: json.RawMessage(`{"x":1}`)})
+		if refusal != nil {
+			t.Fatalf("unexpected refusal: %+v", refusal)
+		}
+		if result.Answer != 0 {
+			t.Errorf("expected the derived answer 0 (the argmax index), got %#v (the backend's claimed Score was 7)", result.Answer)
+		}
+	})
+
+	t.Run("noul", func(t *testing.T) {
+		tb := &backendtest.Backend{Mode: backendtest.ModeOK, Answer: backend.Answer{
+			Yes:           0.99, // disagrees with its own probabilities below
+			Probabilities: map[string]float64{"true": 0.2, "false": 0.8},
+			Model:         "test-0",
+		}}
+		d := newService(t, noulTemplate("task"), tb)
+		result, refusal := d.Service.Ask(context.Background(),
+			service.Caller{AgentID: "a"},
+			service.AskRequest{Template: "eval.outcome_met", State: json.RawMessage(`{"task":"t"}`)})
+		if refusal != nil {
+			t.Fatalf("unexpected refusal: %+v", refusal)
+		}
+		if result.Answer != 0.2 {
+			t.Errorf("expected the derived answer 0.2 (Probabilities[true]), got %#v (the backend's claimed Yes was 0.99)", result.Answer)
+		}
+	})
+}
+
 // @test:TestOnlyTheFieldsATemplateNamesReachTheBackend
 func TestOnlyTheFieldsATemplateNamesReachTheBackend(t *testing.T) {
 	tb := &backendtest.Backend{Mode: backendtest.ModeOK, Answer: backend.Answer{

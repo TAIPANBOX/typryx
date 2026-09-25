@@ -49,6 +49,16 @@ type Question struct {
 // validates every one of these before trusting an answer, never the backend
 // itself, because invariant 1 (never invent an answer) has to hold even
 // against a backend that lies or breaks.
+//
+// Choice, Score and Yes are ADVISORY ONLY and are never read by
+// internal/service: the service derives the served answer from
+// Probabilities itself (argmax over the template's option keys for choice,
+// argmax index for score, Probabilities["true"] for noul), because a
+// backend that returns a valid distribution alongside a disagreeing Choice,
+// Score or Yes must never have the disagreement served. They remain here so
+// a backend can report what it believes it answered, for logging or a
+// future backend implementation's own convenience, but nothing in this
+// repository trusts them.
 type Answer struct {
 	Choice        string
 	Score         int
