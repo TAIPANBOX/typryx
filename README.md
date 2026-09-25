@@ -13,7 +13,7 @@ and recorded.
 ![Go 1.27](https://img.shields.io/badge/Go-1.27-4493f8)
 ![one direct dependency](https://img.shields.io/badge/direct%20dependency-one-2dd4bf)
 ![license Apache 2.0](https://img.shields.io/badge/license-Apache--2.0-9aa7b8)
-![tests](https://img.shields.io/badge/tests-540-brightgreen)
+![tests](https://img.shields.io/badge/tests-803-brightgreen)
 
 </div>
 
@@ -193,8 +193,9 @@ gives says `backend: stub` so nothing downstream mistakes it for a judgement.
 A backend error, a timeout, a canceled request, missing probabilities, or a probability
 set that does not validate (wrong keys, out of range, not summing to one) all produce
 `unanswered` with a `reason` (`backend_error`, `timeout`, `canceled`,
-`no_probabilities`, `bad_probabilities`, and the openai-logprobs backend's own
-`no_logprobs`, `label_mass_too_low`, `too_many_options`, `bad_logprobs`, see below) and the wire shape
+`no_probabilities`, `bad_probabilities`, the openai-logprobs backend's own
+`no_logprobs`, `label_mass_too_low`, `too_many_options`, `bad_logprobs`, and the
+jev backend's own `bad_noul`, see below) and the wire shape
 omits `answer` and `probabilities` entirely. No renormalizing, no fallback guess.
 
 ## Local model backend
@@ -236,6 +237,48 @@ answer that does not achieve the task), taken verbatim from this run, prompts un
 from what this section already describes. The `eval.answer_quality` and
 `request.complexity` rows above look sound on this small, informal sample, but six asks
 prove nothing about calibration; see NOT PROVEN.
+
+## Jev backend
+
+`TYPRYX_BACKEND=jev` asks the Jev API (TypeSafe AI, "typed-decision models"): one
+question per ask, sent as `POST {TYPRYX_JEV_URL}/systemone` with the egressed state
+as a JSON object (never a string), the same `template.Egress` every other backend
+gets, and the template's `criteria` translated per type: `choice` sends
+`{option: description}` with an empty description sent as JSON `null`; `score`
+sends the level array; `noul` sends `{"true": .., "false": ..}` only when the
+template actually named criteria, and no `criteria` field at all otherwise.
+
+The response's `answers` entry for that one question is mapped back exactly:
+`choice` and `score` probabilities are taken as returned, unvalidated by this
+backend on purpose, because `internal/service`'s own probability check (the exact
+key set, in range, summing to one) stays the one authority every backend answers
+to alike; `noul` carries a single number, checked finite and in `[0,1]` before this
+backend builds `{"true": noul, "false": 1-noul}` itself, or `unanswered` with
+`bad_noul` when it is not. A `confidence` field the response may carry is never
+read: the served answer and its probabilities come from the distribution alone,
+the same rule every backend in this repository holds. The model recorded is the
+response's own `model` field (the concrete version that actually answered, e.g.
+`jev-1.13.0`), falling back to the configured `TYPRYX_JEV_MODEL` only when the
+response omits it; calibration groups by that served version, never by the
+configured name.
+
+A `429` (rate limited) or `529` (overloaded) response is retried, up to 3 attempts
+total, with an exponential backoff (200ms, then 400ms) a server's own `Retry-After`
+header can override, capped at 2 seconds either way; the wait is always raced
+against the caller's own deadline, so a retry that would cross it is never made and
+the ask ends `timeout` instead. Every other status (`401` invalid key, `422`
+validation failure, anything else) is never retried and never echoes its body back
+to the caller or into a log line. Cost is `TYPRYX_JEV_PRICE_PER_MTOK_INPUT` times
+input tokens plus `TYPRYX_JEV_PRICE_PER_MTOK_OUTPUT` times output tokens, both
+optional and defaulting to 0: unset means `cost_usd` is always 0 and this backend
+is unpriced, never a hardcoded number.
+
+Built and tested only against an `httptest` fake replaying the wire shape
+documented at docs.typesafe.ai/api and /introduction/quickstart, pinned verbatim
+in `internal/backend/testdata/jev_example_response.json` (read 2026-09-25 by the
+session model). **Not yet run against the live API**: there is no key, and calling
+a paid service is a spending decision made separately and in advance, not
+something a build step does on its own. See NOT PROVEN and Status.
 
 ## Calibration
 
@@ -403,7 +446,7 @@ typryx templates check examples/templates
 | `TYPRYX_ADDR` | no | `127.0.0.1:4320` | |
 | `TYPRYX_KEYS` | no | none | `key=agent://domain/name,key2,...` |
 | `TYPRYX_ALLOW_OPEN_BIND` | no | unset | only `1`/`true` count |
-| `TYPRYX_BACKEND` | **yes** | none | `stub` or `openai-logprobs` in this phase; anything else (including `jev`) refuses to start naming it, at exit 2 |
+| `TYPRYX_BACKEND` | **yes** | none | `stub`, `openai-logprobs`, or `jev` in this phase; anything else refuses to start naming it, at exit 2 |
 | `TYPRYX_TEMPLATES` | **yes** | none | directory of `*.json` templates |
 | `TYPRYX_EVENTS` | no | none = journal off | NDJSON agent-event path |
 | `TYPRYX_LEDGER_DIR` | no | none | holds `answers.ndjson`, `outcomes.ndjson`; unset means `POST /v1/outcome` refuses every call with `no_ledger`, and answers are not ledgered |
@@ -414,6 +457,11 @@ typryx templates check examples/templates
 | `TYPRYX_OPENAI_MODEL` | when `TYPRYX_BACKEND=openai-logprobs` | none | the model name sent with every request |
 | `TYPRYX_OPENAI_KEY_FILE` | no | none = no `Authorization` header | path to a file holding a bearer key, trimmed; never read from the environment value itself, never logged, never echoed into an error |
 | `TYPRYX_OPENAI_MIN_LABEL_MASS` | no | `0.9` | fraction of the response's probability mass that must land on a lettered option; below it, the ask is unanswered with `label_mass_too_low` |
+| `TYPRYX_JEV_KEY_FILE` | when `TYPRYX_BACKEND=jev` | none | path to a file holding the Jev bearer key, trimmed; never read from the environment value itself, never logged, never echoed into an error |
+| `TYPRYX_JEV_URL` | no | `https://api.typesafe.ai/v1` | must be absolute http/https with a host and no userinfo, query, or fragment |
+| `TYPRYX_JEV_MODEL` | no | `jev-latest` | the model name sent with every request |
+| `TYPRYX_JEV_PRICE_PER_MTOK_INPUT` | no | `0` | USD per million input tokens; `0` means unpriced, `cost_usd` is always `0` |
+| `TYPRYX_JEV_PRICE_PER_MTOK_OUTPUT` | no | `0` | USD per million output tokens; `0` means unpriced (matches the vendor's own launch pricing, output free) |
 
 A missing required variable, or a required-when-chosen variable missing for the backend
 actually named, exits 2 and names the variable. A non-loopback bind with no
@@ -421,10 +469,9 @@ actually named, exits 2 and names the variable. A non-loopback bind with no
 configuration is checked first, so that refusal always fires with the rest of the
 configuration already known sane.
 
-A future `jev` (or any other paid backend)'s API key is read from a file path named by
-an environment variable, the same shape `TYPRYX_OPENAI_KEY_FILE` already uses, never
-from the environment value itself and never logged. `TYPRYX_BACKEND` set to `jev`
-refuses to start; only `stub` and `openai-logprobs` are accepted in this phase.
+`jev` (or any other paid backend)'s API key is read from a file path named by an
+environment variable, the same shape `TYPRYX_OPENAI_KEY_FILE` already uses, never
+from the environment value itself and never logged; see [Jev backend](#jev-backend).
 
 ## What it will not do
 
@@ -438,9 +485,9 @@ refuses to start; only `stub` and `openai-logprobs` are accepted in this phase.
   refusal that says why.
 - **No key printed by anything in this repository**, including `typryx connect`.
 - **No claim about a vendor model's speed, cost, or accuracy.** Jev (TypeSafe AI) is
-  named only as one of the typed-decision models a later backend can target; its
-  published price and availability are vendor figures, quoted as vendor figures or not
-  at all.
+  a typed-decision model backend built and tested against a replayed wire shape, not
+  yet run live; its published price and availability are vendor figures, quoted as
+  vendor figures or not at all.
 
 ## What is checked, and how
 
@@ -457,25 +504,25 @@ go build ./...
 ./scripts/gates-have-teeth.sh
 ```
 
-264 tests. `go test ./... -race` covers every package; `internal/manifest` builds and
+298 tests. `go test ./... -race` covers every package; `internal/manifest` builds and
 starts the real binary to prove `components.json` against what it actually does; CI's
 `image` job builds the Dockerfile on every push and pull request, pushing nowhere.
 
 Coverage (`go test ./... -coverprofile=cover.out -race`, measured 2026-09-25, after phase
-E landed): **87.1%** overall, down from 90.6% before this phase because the denominator
-grew with two low-coverage additions: `examples/calibration` (31.4%: `run`/`main` and the
-two functions that build and send HTTP requests are proved by the live, real-server
-measurement above rather than a mock, the same reasoning `cmd/typryx`'s own `main`/`run`
-already carry; its pure generation logic, `genItems`, is unit-tested and 100% covered),
-and `cmd/typryx` staying at 78.7% while gaining `calibrationCmd` (80.4%) and `emitDrift`
-(85.0%, both cmd-level; the untested remainder is malformed-flag and file-open error
-paths). `internal/calibration` itself is 94.3% (a white-box test file for the two
-unexported helpers with edge-case branches, `truthKeyFor` and `binIndex`, both 100%; `Run`
-91.8% and `computeGroup` 95.5%, the gap being defensive branches the 200-seed hostile
-sweep does not reliably reach every run). Unchanged: `internal/backend/backendtest` and
-`internal/record` 100%, `internal/api` 98.4%, `internal/backend` 92.7%, `internal/door`
-97.8%, `internal/service` 93.7%, `internal/mcp` 93.5%, `internal/template` 94.0%,
-`internal/ledger` 90.4%. `cmd/typryx`'s `main`/`run` are still the signal-driven serve
+D landed): **87.9%** overall, up from 87.1% before this phase. `internal/backend` rose to
+93.5% (from 92.7%): `jev.go` itself is 93.7% statement coverage (`retryDelay`, `cost`,
+`answerFrom`'s choice/score/noul paths, `jevQuestionWireFor`'s per-type criteria shapes,
+and the 200-seed hostile response sweep in `jev_test.go` all covered; the untested
+remainder is two genuinely unreachable defensive branches, `Ask`'s trailing return after
+its retry loop and `answerFrom`'s unknown-type case, both guarded ahead of them by
+`jevQuestionWireFor`'s own type check). `internal/service` rose to 93.8% (from 93.7%) with
+`TestNoulCriteriaGivenReflectsWhetherTheTemplateSetAny`. `cmd/typryx` rose to 80.8% (from
+78.7%) with the jev config-loading tests. Unchanged: `internal/backend/backendtest` and
+`internal/record` 100%, `internal/api` 98.4%, `internal/door` 97.8%, `internal/mcp` 93.5%,
+`internal/template` 94.0%, `internal/ledger` 90.4%, `internal/calibration` 94.3%,
+`examples/calibration` 31.4% (proved by the live measurement in
+[Calibration](#calibration) rather than a mock, the same reasoning `cmd/typryx`'s own
+`main`/`run` already carry). `cmd/typryx`'s `main`/`run` are still the signal-driven serve
 loop, proved by starting the real binary in `internal/manifest` and by process-level
 tests in `cmd/typryx/main_test.go` rather than by in-process instrumentation.
 
@@ -515,6 +562,14 @@ repository, and is now covered.
 - **The openai-logprobs backend is unpriced.** `cost_usd` is always `0`, even against a
   paid OpenAI-compatible endpoint, because this phase has no price configuration; a paid
   endpoint's actual cost is not tracked.
+- **The jev backend has never made a live call.** Built and tested only against an
+  `httptest` fake replaying the documented wire shape; there is no key and no spend
+  approval to call the real `api.typesafe.ai`. See [Jev backend](#jev-backend) and
+  [Status](#status).
+- **Jev's rate limits, maximum state size, and maximum questions per call are
+  undocumented by the vendor.** Nothing here can measure a bound the vendor has not
+  published; `retryDelay`'s 2-second cap is this repository's own choice, not a
+  vendor-stated number.
 - **typryx records no agent behind the tokenfuse broker.** The broker forwards no
   identity to a named upstream; see [Connect it](#connect-it).
 - **No launcher installs this.** stack-single, stack-up, and stack-k8s carry no typryx
@@ -538,11 +593,12 @@ repository, and is now covered.
       [Local model backend](#local-model-backend).
 - [x] **Phase E**: calibration (`typryx calibration`), measured against `stub`,
       `qwen2.5:3b`, and `qwen2.5:7b`; see [Calibration](#calibration).
-- [ ] **Phase D**: the `jev` backend, needs a decision on signing up and spending before
-      any live call.
+- [x] **Phase D**: the `jev` backend is built and tested against a replayed wire shape;
+      the live call still needs a decision on signing up and spending. See
+      [Jev backend](#jev-backend).
 - [ ] **Phase F onward**: the agent-passport registration, launcher wiring (stack-single,
       stack-up, stack-k8s), and consumers (verdryx, wardryx, tokenfuse's router, costcrew,
       engram).
 
-Next: Jev (phase D, needs a spend decision first), then the agent-passport registration
-(phase F).
+Next: the live Jev run (needs a spend decision first), then the agent-passport
+registration (phase F).

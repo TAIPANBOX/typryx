@@ -172,3 +172,25 @@ Feature: Typed answers, as an option a customer adds to the stack
     When calibration is computed
     Then that group's verdict is insufficient
     And no calibration bound is judged against it
+
+  # @test:TestTheRequestCarriesTheStateAsAnObjectAndOneQuestion
+  Scenario: Jev answers through the same governed door as every other backend
+    Given a template that names two fields of the state it may send
+    And Jev is the configured backend
+    When it is asked with a state holding more fields than the template names
+    Then Jev receives only the already-governed egress, never the raw state
+    And its answer is mapped into the same probability shape every backend gives
+
+  # @test:TestARetryNeverCrossesTheDeadline
+  Scenario: A rate-limited Jev call is retried, briefly, and never past the caller's deadline
+    Given Jev responds that it is rate limited or overloaded
+    When a question is asked with a short deadline
+    Then Jev retries briefly, with a backoff between attempts
+    But it never waits past the caller's own deadline for one more attempt
+
+  # @test:TestTheRecordedModelIsTheServedVersion
+  Scenario: The Jev version that answered is what calibration scores
+    Given Jev's response names the concrete model version that actually answered
+    When the answer is recorded
+    Then the recorded model is the version Jev served, not the name that was configured
+    And calibration groups by that served version, never by the configured name alone

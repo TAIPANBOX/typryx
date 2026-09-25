@@ -85,6 +85,15 @@ in the plan.
    model's review of phase C, 2026-09-25, after the hostile sweep passed:
    the sweep checks the output, which normalisation always makes look valid;
    four mutants on the two bounds each caught)*
+   The jev backend's own `backend.UnansweredError` (phase D) adds
+   `no_probabilities` (an answer missing under its id, of the wrong type, or
+   with no probabilities) and `bad_noul` (a noul answer's own number is
+   missing, non-finite, or outside [0,1], so the two-key distribution this
+   backend builds from it is never built out of nonsense; choice and score
+   probabilities are passed through unvalidated by this backend on purpose,
+   since `internal/service.validateProbabilities` stays the one authority
+   over them). *(test: `TestAMissingAnswerIsUnanswered`,
+   `TestANoulOutsideZeroOneIsUnanswered`, both in `internal/backend`)*
    *(test: `TestAFailingBackendGivesUnansweredAndNeverAGuess`,
    `TestBadProbabilitiesAreUnansweredNotGuessed`, both in
    `internal/service`; `TestABackendsNamedReasonReachesTheCallerAndTheRecord`
@@ -289,10 +298,37 @@ in the plan.
     write is one explicit, separate step a caller chooses, gated on a real
     `--agent-id` (invariant 3's identity rule, applied here too).
 
+26. **A rate-limited or overloaded Jev call is retried, briefly, and never
+    past the caller's deadline.** Only 429 and 529 are retried, up to 3
+    attempts total, with an exponential backoff (200ms, then 400ms) a
+    server's own `Retry-After` header can override, capped at 2s either way.
+    The wait between attempts is always raced against the context's own
+    `Done()`, so a retry that would cross the caller's deadline is never
+    made: the ask ends `timeout`, through the same precedence every other
+    backend's deadline already goes through in `internal/service.ask`, not
+    through anything jev decides for itself. Every other status (401, 422,
+    anything else) is never retried. *(test:
+    `TestRateLimitIsRetriedWithBackoffAndThenSucceeds`,
+    `TestRetryAfterIsHonouredButCapped`, `TestNoRetryOn401Or422`,
+    `TestARetryNeverCrossesTheDeadline`, all in `internal/backend`)*
+
+27. **Jev's cost is computed only from the configured price, never
+    hardcoded.** `TYPRYX_JEV_PRICE_PER_MTOK_INPUT`/`_OUTPUT` are the only
+    source of a non-zero `cost_usd`; unset, both default to 0 and every
+    answer reports `cost_usd: 0` regardless of how many tokens were used,
+    which is what "unpriced" means here rather than a guessed number.
+    *(test: `TestCostIsInputTokensTimesTheConfiguredPrice`,
+    `TestCostIsZeroWhenNoPriceIsConfigured`, both in `internal/backend`)*
+
 ### Not built yet
 
-- **`jev`** (phase D) does not exist. `TYPRYX_BACKEND=jev` refuses to start,
-  naming it. `openai-logprobs` (phase C) and calibration (phase E) are now
+- **`jev`** (phase D) is built: `TYPRYX_BACKEND=jev` starts and makes real
+  calls to `TYPRYX_JEV_URL`. It has been run only against an httptest fake
+  replaying the wire shape documented at docs.typesafe.ai (pinned in
+  `internal/backend/testdata/jev_example_response.json`); there is no key
+  and no spend approval to call the real `api.typesafe.ai`, so nothing here
+  has been run against it. See README's "Jev backend" section and NOT
+  PROVEN. `openai-logprobs` (phase C) and calibration (phase E) are also
   built; see README's "Local model backend" and "Calibration" sections.
 - **MCP behind tokenfuse's broker**: untested until phase B2. See README.
 
@@ -341,6 +377,21 @@ never having written it unfixed in the first place (the `errors.As`
 precedence in `internal/service.ask`, and `loadConfig`'s
 `TYPRYX_BACKEND=openai-logprobs` branch), since those two were implemented
 in the same pass as their tests were drafted.
+
+Phase D (the jev backend) followed the same discipline: `internal/backend/jev.go`
+started as a compiling stub (`Ask` always returning
+`UnansweredError{"not_implemented"}`, `cmd/typryx` still refusing any backend
+but `stub` and `openai-logprobs`) and every test in `internal/backend/jev_test.go`,
+including its 200-seed hostile response sweep, `cmd/typryx/main_test.go`'s new
+jev tests, and `internal/manifest`'s two new jev tests, was run against that
+stub and failed for the stated reason (a compile error for the config-struct
+tests, since `cfg.jev` did not exist yet; `UnansweredError{"not_implemented"}`
+for everything that called `Ask`) before the real implementation and wiring
+landed. One supporting change preceded the backend itself and followed the
+same rule on its own: `TestNoulCriteriaGivenReflectsWhetherTheTemplateSetAny`
+in `internal/service` failed against the unfixed `questionFor` (which
+discarded `template.NoulCriteria`'s own `ok` result) before that one line
+was fixed.
 
 ## Design notes worth keeping visible
 
