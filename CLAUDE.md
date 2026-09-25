@@ -200,6 +200,33 @@ phases.
 18. **No real secret ever reaches this repository**, tracked or in history.
     *(gate: `scripts/no-secrets.sh`)*
 
+19. **A JSON-RPC notification (a request with no `id`) is answered 202
+    Accepted with no body**, keyed on the absent `id` rather than the method
+    name, per MCP 2025-06-18's Streamable HTTP transport. Before this, the
+    one notification the server handled by name got 204, and any other
+    notification got 200 with an error body. *(test:
+    `TestANotificationIsAnswered202WithNoBody` in `internal/mcp`, two cases:
+    `notifications/initialized` and an invented notification name, so the
+    rule is proven general rather than special-cased for one method)*
+
+20. **Every tool's schema is valid JSON Schema for a strict client.**
+    `required` is always a JSON array, never `null`: a nil `[]string` in Go
+    marshals to `null`, and Claude Code 2.1.270 silently dropped typryx's
+    whole tool list over exactly that on `list_questions` (no required
+    arguments) before this was fixed, on `main`'s `tools/list` response,
+    with typryx's own MCP tests all green at the time. Found running a real
+    client, not by any test in this repository. *(test:
+    `TestEveryToolSchemaIsValidJSONSchemaForStrictClients` in `internal/mcp`,
+    checked with freeform on and off, run red first against the unfixed
+    code: `required is not a JSON array (got <nil>, likely null)`)*
+
+21. **`typryx connect` never prints a real key.** Every target names the
+    environment variable `--key-env` points at (`TYPRYX_KEY` by default)
+    only by its NAME, in a `${...}` placeholder; the variable itself is
+    never read. *(test: `TestConnectNeverPrintsAKey` in `cmd/typryx`, which
+    sets a fake `TYPRYX_KEYS` in the process environment and checks it in no
+    target's output; golden-output tests per target in the same file)*
+
 ### Not built yet
 
 - **Calibration**: a probability's calibration is computed per template x
