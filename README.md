@@ -13,7 +13,7 @@ and recorded.
 ![Go 1.27](https://img.shields.io/badge/Go-1.27-4493f8)
 ![one direct dependency](https://img.shields.io/badge/direct%20dependency-one-2dd4bf)
 ![license Apache 2.0](https://img.shields.io/badge/license-Apache--2.0-9aa7b8)
-![tests](https://img.shields.io/badge/tests-501-brightgreen)
+![tests](https://img.shields.io/badge/tests-540-brightgreen)
 
 </div>
 
@@ -237,6 +237,105 @@ from what this section already describes. The `eval.answer_quality` and
 `request.complexity` rows above look sound on this small, informal sample, but six asks
 prove nothing about calibration; see NOT PROVEN.
 
+## Calibration
+
+`typryx calibration [--ledger DIR] [--min-n 30] [--max-brier X] [--max-ece X] [--json]
+[--emit PATH --agent-id agent://...]` answers the question the local-model measurement
+above raises: a probability a backend states is honest ABOUT THE MODEL (it is what the
+model actually put on that token), which is not the same as a probability an operator
+can act on. Calibration checks the second claim against a later, real outcome.
+
+It reads `answers.ndjson` and `outcomes.ndjson` **read-only**: it never truncates,
+rewrites, or locks either file, because the service may still be running and appending
+to them while a calibration run reads. A torn last line (a crash mid-write, or a
+concurrent writer caught mid-append) is skipped and counted, not repaired; a malformed
+line anywhere is skipped and counted too, because a report has to come out even over an
+imperfect ledger.
+
+Every scored item is grouped by **template x template_version x backend x model, never
+pooled across any of the four**: two models under the same template, or the same model
+before and after a template changed, are never averaged into one number that would hide
+which one is the problem. Per group:
+
+- **n**: how many outcomes were actually scored for this exact group.
+- **accuracy**: how often the highest-probability answer (ties go to the lexically
+  smallest key) matched the real outcome.
+- **mean confidence**: the average of that highest probability, whether or not it was right.
+- **overconfidence**: mean confidence minus accuracy. Positive means the backend is more
+  sure of itself than it has earned; negative means the opposite.
+- **Brier score**: the mean squared error between the full probability distribution and
+  the one-hot truth, summed over every key. 0 is perfect, 2 is the worst possible. For a
+  `noul` (yes/no) question this is **exactly twice** the usual single-term binary Brier
+  score, because the sum has both the "true" and the "false" term and they are equal by
+  construction.
+- **ECE (expected calibration error)**: bin every item into 10 equal-width confidence
+  bins ([0, 0.1), ..., [0.9, 1.0]), and take the weighted average, over bins, of
+  |accuracy in that bin - mean confidence in that bin|. `--json` includes the 10 bins
+  themselves (n, mean confidence, accuracy per bin), so a thin bin's noise is visible
+  rather than smoothed into one number.
+
+A group's **verdict** is `insufficient` when it has fewer than `--min-n` scored items (no
+bound is even judged; a thin sample cannot answer this question either way),
+`drift` when a set `--max-brier` or `--max-ece` bound is exceeded, or `ok` otherwise.
+Exit code: 0 with no group drifting, 1 with at least one, 2 on a usage or configuration
+error (including neither `--ledger` nor `TYPRYX_LEDGER_DIR` being set: the error names
+both). `--emit PATH --agent-id agent://...` writes one `calibration_drift` event
+(severity high) per drifting group to PATH through the same agent-event journal every
+other part of typryx writes to; without a valid `--agent-id`, every event is skipped and
+counted rather than written under a fabricated identity (SPEC 6.1), and the command says
+so on stderr. **Calibration only reports; nothing here turns a verdict into an action.**
+A `drift` verdict is a fact for an operator to read, never a `deny`, a cap change, or
+anything this repository or a consumer does on its own.
+
+### Measured, 2026-09-25
+
+`examples/calibration/main.go` generates 60 deterministic arithmetic items ("what is A
+times B", A and B in 2..19, the correct product for half and a plausible wrong answer
+for the other half), asks a running typryx's `eval.outcome_met` template for each, and
+posts the real, known answer to `/v1/outcome`. Run against Ollama 0.34.2 on this Mac
+(`qwen2.5:3b` and `qwen2.5:7b`, both already pulled), seed 1, a fresh ledger per backend:
+
+| backend | model | n | accuracy | mean confidence | overconfidence | Brier | ECE |
+|---|---|---|---|---|---|---|---|
+| stub | stub-0 | 60 | 0.533 | 0.708 | 0.174 | 0.539 | 0.174 |
+| openai-logprobs | qwen2.5:3b | 60 | 0.500 | 0.995 | 0.495 | 0.987 | 0.495 |
+| openai-logprobs | qwen2.5:7b | 57 | 0.702 | 0.948 | 0.246 | 0.595 | 0.318 |
+
+(`qwen2.5:7b` answered 57 of 60; the other 3 came back unanswered, no journal was
+configured for this run so the reason was not captured. `stub`'s row is deterministic and
+free by construction, shown only as a baseline: its numbers mean nothing about any real
+question.)
+
+Read plainly: `qwen2.5:3b` states 0.995 confidence on average while being right half the
+time on an arithmetic task, the same overconfidence phase C's own measurement first
+found (`12 x 12 = 121` judged correct at p ~ 1.0). `qwen2.5:7b` is better but still
+overconfident, 0.948 stated against 0.702 actual. Neither model's stated probability on
+this task should be used as though it were the real one; calibration is what makes that
+checkable instead of anecdotal.
+
+To reproduce (three fresh ledgers, one per backend):
+
+```sh
+go build -o /tmp/typryx ./cmd/typryx
+
+# 1. stub
+TYPRYX_BACKEND=stub TYPRYX_TEMPLATES=examples/templates TYPRYX_KEYS=k1=agent://demo.example/tester \
+  TYPRYX_LEDGER_DIR=/tmp/cal-stub /tmp/typryx serve &
+go run ./examples/calibration -url http://127.0.0.1:4320 -key k1 -n 60 -seed 1
+
+# 2. openai-logprobs, qwen2.5:3b (repeat with qwen2.5:7b, a fresh port and ledger dir)
+TYPRYX_BACKEND=openai-logprobs TYPRYX_OPENAI_URL=http://127.0.0.1:11434/v1 \
+  TYPRYX_OPENAI_MODEL=qwen2.5:3b TYPRYX_TIMEOUT_MS=30000 \
+  TYPRYX_TEMPLATES=examples/templates TYPRYX_KEYS=k1=agent://demo.example/tester \
+  TYPRYX_LEDGER_DIR=/tmp/cal-3b /tmp/typryx serve &
+go run ./examples/calibration -url http://127.0.0.1:4320 -key k1 -n 60 -seed 1
+
+/tmp/typryx calibration --ledger /tmp/cal-stub --min-n 30
+/tmp/typryx calibration --ledger /tmp/cal-3b --min-n 30
+```
+
+![A reliability diagram: the diagonal is perfect calibration, and qwen2.5:3b and qwen2.5:7b's measured bins both sit well below it, meaning both models are confident far more often than they are right](docs/calibration.svg)
+
 ## What leaves the box
 
 ![Of five fields in the state, only the one the template names travels to the backend; the other four are held back and counted](docs/egress.svg)
@@ -358,20 +457,27 @@ go build ./...
 ./scripts/gates-have-teeth.sh
 ```
 
-233 tests. `go test ./... -race` covers every package; `internal/manifest` builds and
+264 tests. `go test ./... -race` covers every package; `internal/manifest` builds and
 starts the real binary to prove `components.json` against what it actually does; CI's
 `image` job builds the Dockerfile on every push and pull request, pushing nowhere.
 
-Coverage (`go test ./... -coverprofile=cover.out`, measured 2026-09-25, after the
-openai-logprobs backend landed): **90.6%** overall. `internal/backend/backendtest` and
-`internal/record` 100%, `internal/api` 98.4%, `internal/backend` 92.5% (up from 98.1%:
-the denominator grew with `openai.go`'s hostile-input handling, most of it exercised by
-the 220-seed sweep in `internal/backend/openai_test.go`), `internal/door` 97.8%,
-`internal/service` 93.7%, `internal/mcp` 93.5%, `internal/template` 94.0%,
-`internal/ledger` 90.4%, `cmd/typryx` 78.0% (its `main`/`run` are the signal-driven
-serve loop, proved by starting the real binary in `internal/manifest` and by
-process-level tests in `cmd/typryx/main_test.go` rather than by in-process
-instrumentation).
+Coverage (`go test ./... -coverprofile=cover.out -race`, measured 2026-09-25, after phase
+E landed): **87.1%** overall, down from 90.6% before this phase because the denominator
+grew with two low-coverage additions: `examples/calibration` (31.4%: `run`/`main` and the
+two functions that build and send HTTP requests are proved by the live, real-server
+measurement above rather than a mock, the same reasoning `cmd/typryx`'s own `main`/`run`
+already carry; its pure generation logic, `genItems`, is unit-tested and 100% covered),
+and `cmd/typryx` staying at 78.7% while gaining `calibrationCmd` (80.4%) and `emitDrift`
+(85.0%, both cmd-level; the untested remainder is malformed-flag and file-open error
+paths). `internal/calibration` itself is 94.3% (a white-box test file for the two
+unexported helpers with edge-case branches, `truthKeyFor` and `binIndex`, both 100%; `Run`
+91.8% and `computeGroup` 95.5%, the gap being defensive branches the 200-seed hostile
+sweep does not reliably reach every run). Unchanged: `internal/backend/backendtest` and
+`internal/record` 100%, `internal/api` 98.4%, `internal/backend` 92.7%, `internal/door`
+97.8%, `internal/service` 93.7%, `internal/mcp` 93.5%, `internal/template` 94.0%,
+`internal/ledger` 90.4%. `cmd/typryx`'s `main`/`run` are still the signal-driven serve
+loop, proved by starting the real binary in `internal/manifest` and by process-level
+tests in `cmd/typryx/main_test.go` rather than by in-process instrumentation.
 
 `scripts/gates-have-teeth.sh` plants 13 faults, one per gate behaviour, and requires
 each gate to fail on its own fault and pass on what it must not catch. Eleven defects
@@ -384,10 +490,21 @@ repository, and is now covered.
 
 - **`stub` answers mean nothing about any real question.** It is deterministic and free,
   for tests and demos only.
-- **LLM token probabilities are often overconfident and uncalibrated.** The measured run
-  above shows exactly this: a wrong arithmetic answer still scored `true` at 0.946 for
-  `eval.outcome_met`. Whether, and how much, a given template x backend x model can be
-  trusted is what phase E's calibration is for; nothing in this phase measures it.
+- **LLM token probabilities are often overconfident and uncalibrated, and now this is
+  measured rather than anecdotal.** The [Calibration](#calibration) section's table is the
+  proof: `qwen2.5:3b` states 0.995 mean confidence while being right half the time on 60
+  arithmetic items. Calibration reports this; it does not fix it, threshold it, or act on
+  it in any way.
+- **60 items is a small, informal sample.** It is enough to show gross overconfidence, not
+  enough to bound a Brier score or ECE precisely; a bin with only a handful of items in
+  it is noisy, which is why `--json` reports each bin's own `n` rather than only the
+  rolled-up number.
+- **Arithmetic is one narrow task.** Nothing here says a model's calibration on
+  `eval.outcome_met`'s "is this arithmetic answer correct" generalizes to any other
+  template, question type, or domain.
+- **Calibration takes no automatic action on a `drift` verdict.** It is reported, with
+  `--emit` writing one event for a human or another system to read; nothing in this
+  repository turns it into a `deny`, a cap change, or any other enforcement.
 - **Position and label bias are not measured.** Whether relabelling options A, B, C in a
   different order, or using different letters, shifts the answer is unmeasured here.
 - **A hostile state can still steer the model's answer.** typryx keeps the state
@@ -398,8 +515,6 @@ repository, and is now covered.
 - **The openai-logprobs backend is unpriced.** `cost_usd` is always `0`, even against a
   paid OpenAI-compatible endpoint, because this phase has no price configuration; a paid
   endpoint's actual cost is not tracked.
-- **Calibration is not built.** `outcomes.ndjson` is written; nothing reads it yet to
-  compute a Brier score or check whether a probability can be trusted.
 - **typryx records no agent behind the tokenfuse broker.** The broker forwards no
   identity to a named upstream; see [Connect it](#connect-it).
 - **No launcher installs this.** stack-single, stack-up, and stack-k8s carry no typryx
@@ -421,10 +536,13 @@ repository, and is now covered.
 - [x] **Phase C**: a local `openai-logprobs` backend against an OpenAI-compatible
       endpoint, measured against Ollama 0.34.2 (`qwen2.5:3b`, `qwen2.5:7b`); see
       [Local model backend](#local-model-backend).
+- [x] **Phase E**: calibration (`typryx calibration`), measured against `stub`,
+      `qwen2.5:3b`, and `qwen2.5:7b`; see [Calibration](#calibration).
 - [ ] **Phase D**: the `jev` backend, needs a decision on signing up and spending before
       any live call.
-- [ ] **Phase E onward**: calibration, the agent-passport registration, launcher wiring
-      (stack-single, stack-up, stack-k8s), and consumers (verdryx, wardryx, tokenfuse's
-      router, costcrew, engram).
+- [ ] **Phase F onward**: the agent-passport registration, launcher wiring (stack-single,
+      stack-up, stack-k8s), and consumers (verdryx, wardryx, tokenfuse's router, costcrew,
+      engram).
 
-Next: calibration (phase E), then Jev (phase D, needs a spend decision first).
+Next: Jev (phase D, needs a spend decision first), then the agent-passport registration
+(phase F).

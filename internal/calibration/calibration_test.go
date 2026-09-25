@@ -404,6 +404,27 @@ func TestOrphanNotScorableAndTruthNotAKeyAreCounted(t *testing.T) {
 	}
 }
 
+func TestAnyDriftReportsTrueOnlyWhenAGroupDrifts(t *testing.T) {
+	ok := calibration.Report{Groups: []calibration.Group{{Verdict: "ok"}, {Verdict: "insufficient"}}}
+	if ok.AnyDrift() {
+		t.Error("expected AnyDrift false when no group drifted")
+	}
+	drift := calibration.Report{Groups: []calibration.Group{{Verdict: "ok"}, {Verdict: "drift"}}}
+	if !drift.AnyDrift() {
+		t.Error("expected AnyDrift true when a group drifted")
+	}
+}
+
+func TestFormatGroupLineTruncatesTheVersionToEightHexChars(t *testing.T) {
+	line := calibration.FormatGroupLine(calibration.Group{
+		Template: "t", TemplateVersion: "0123456789abcdef", Backend: "b", Model: "m",
+		N: 5, Accuracy: 0.5, Verdict: "ok",
+	})
+	if !strings.Contains(line, "01234567") || strings.Contains(line, "0123456789abcdef") {
+		t.Errorf("expected the version truncated to its first 8 hex characters, got %q", line)
+	}
+}
+
 func TestNoLedgerDirIsAConfigError(t *testing.T) {
 	if _, err := calibration.Run(calibration.Options{}); err == nil {
 		t.Error("expected an error when LedgerDir is empty")
