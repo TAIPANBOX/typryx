@@ -2,3 +2,12 @@
 *.ndjson
 .DS_Store
 cover.out
+
+# Never a real secret in this repo.
+*.pem
+*.key
+.env
+.env.*
+*.secret
+secrets/
+keys/

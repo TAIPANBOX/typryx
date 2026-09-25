@@ -1,0 +1,240 @@
+# CLAUDE.md, working instructions for typryx
+
+Process and invariants only. **No status**: status goes stale and a stale
+instruction file is worse than none. For where the code actually is, read the
+tests and README.md's NOT PROVEN section.
+
+## Read before you change anything
+
+1. `README.md`, and specifically NOT PROVEN.
+2. `features/typed-answers.feature`. Every scenario there is bound to a named
+   test, both directions, by `scripts/features-are-bound.sh`.
+3. `components.json`. The `checked` bucket is proved by `internal/manifest`
+   building and starting the real binary; the `declared` bucket is a
+   statement nobody verifies and carries its own `why`.
+
+## What this is
+
+An OPTIONAL add-on to the TAIPANBOX stack. It answers a typed question
+(choice, score, or noul, meaning yes/no) with a probability, over HTTP and
+MCP, governs what leaves the box and what it costs, records every answer, and
+keeps a ledger so a later truth can be scored against exactly the question
+that was asked. Absent, the rest of the stack behaves exactly as it does
+today: nothing in this repository is consumed by anything else unless an
+operator wires it in.
+
+It is defensive. It exists so an operator can govern their own agents asking
+typed questions. Never describe it, in code, docs or commit messages, as
+tooling for acting against anyone else.
+
+## The working loop
+
+1. Branch off `main`, one logical increment per branch.
+2. Run every gate below. All must pass locally before the push.
+3. Commit with Conventional Commits. End the message with the standard
+   co-author trailer naming the model that actually did the work.
+4. Push the branch, open a PR with `gh`.
+5. Wait for all CI checks to go green. Fix forward, do not force-push over red.
+6. **Ask the user before merging.** Do not self-merge.
+
+## Gates
+
+```sh
+test -z "$(gofmt -l .)"
+go vet ./...
+staticcheck ./...
+go test ./... -race
+go build ./...
+./scripts/features-are-bound.sh
+./scripts/readme-numbers.sh
+./scripts/one-way-out.sh
+./scripts/no-secrets.sh
+./scripts/gates-have-teeth.sh   # needs a clean tree, run it after committing
+```
+
+## Hard invariants
+
+Each one carries how it is held: `(test: ...)` or `(gate: ...)`. An invariant
+with no check, written as though it had one, is worse than an absent
+invariant. Numbering follows the plan this phase implements
+(`~/Development/typryx-plan-2026-09-25.md`); invariant 9 is listed under NOT
+BUILT YET below rather than skipped, so the numbering stays stable across
+phases.
+
+1. **Never invents an answer.** A backend error, a timeout, missing or
+   malformed probabilities, a cap hit: the result is `unanswered` with a
+   reason, and the wire shape omits `answer` and `probabilities` entirely
+   rather than sending a null or a zero. No renormalizing, no fallback guess.
+   *(test: `TestAFailingBackendGivesUnansweredAndNeverAGuess`,
+   `TestBadProbabilitiesAreUnansweredNotGuessed`, both in
+   `internal/service`)*
+
+2. **Only a template's `fields` leave the box.** The egress filter
+   (`template.Filter`) runs before any backend sees the state, and a key not
+   named is dropped and counted as `held_back_fields`. This is held by the
+   TYPE SYSTEM, not by a promise: `backend.Backend.Ask` takes a
+   `template.Egress`, whose fields are unexported and which is constructible
+   only inside package `template`. A backend cannot be handed a map or raw
+   bytes even by an implementation mistake, because nothing outside
+   `internal/template` can construct one except the freeform path
+   (`NewFreeformEgress`), which exists only for the case an operator
+   explicitly switched on. *(test:
+   `TestOnlyTheFieldsATemplateNamesReachTheBackend` in `internal/service`;
+   mutant: the filter loop replaced with "keep every field", caught by that
+   test, see the mutation report in the delivery log)*
+
+3. **Identity comes from the credential**, `X-Typryx-Key` maps to an
+   `agent://` identity through `internal/door`; a header a caller sent
+   claiming an agent (`X-Fuse-Agent-Id`, `X-Agent-Id`, `Agent-Passport`) is
+   never read by `internal/api` or anywhere downstream. *(test:
+   `TestIdentityComesFromTheCredentialNeverFromAHeader` in `internal/api`;
+   mutant: `withDoor` made to prefer `X-Fuse-Agent-Id` when present, caught)*
+
+4. **Open-bind refusal matrix.** A non-loopback bind with no `TYPRYX_KEYS`
+   configured refuses to start (exit 1) unless `TYPRYX_ALLOW_OPEN_BIND=1`.
+   Adapted from scopyx's matrix. *(test:
+   `TestAWideBindWithNoCredentialRefusesToStart` in `internal/manifest`,
+   against the real binary, four rows)*
+
+5. **One way out.** Only `internal/backend` may construct an outbound HTTP
+   client (`http.Client{}`, `&http.Client`, `http.Transport{}`,
+   `http.DefaultClient`, `http.Get`, `http.Post`) or dial directly
+   (`net.Dial`, `net.Dialer`). There is no real network backend in this
+   phase, so today this gate holds trivially; it exists now so the day `jev`
+   or `openai-logprobs` land, a client built in the wrong package is caught
+   immediately rather than found later as an ungoverned egress path.
+   *(gate: `scripts/one-way-out.sh`, teeth cases in
+   `scripts/gates-have-teeth.sh`)*
+
+6. **Nothing paid by default.** `TYPRYX_BACKEND` is required with no
+   default; only `stub` is accepted in this phase, and any other value
+   (including `jev`) refuses to start naming it, at exit 2. *(test:
+   `TestTheServiceRefusesToStartWithoutANamedBackend` in `cmd/typryx`,
+   `TestABackendNotBuiltYetRefusesToStart` in `internal/manifest`)*
+
+7. **Spend is capped by default.** `TYPRYX_MAX_CALLS_PER_HOUR` defaults to
+   1000; `0` disables it, and disabling it logs a warning at boot. The cap is
+   counted only against calls admitted past the freeform gate, the template
+   lookup and the egress filter: a call refused before that point never
+   touches the budget. *(test: `TestTheHourlyCapRefusesTheCallAfterTheLimit`,
+   `TestRefusedCallsDoNotCountAgainstTheCap`, `TestCapWindowRollsOverWithAnInjectedClock`,
+   all in `internal/service`; mutant: the cap taken before the template
+   lookup instead of after, caught by
+   `TestRefusedCallsDoNotCountAgainstTheCap`)*
+
+8. **Every answer and refusal reaches the record**, unless the journal is
+   disabled (`TYPRYX_EVENTS` unset). An event with no agent identity is
+   skipped and COUNTED, never given a fabricated `agent_id`. The record
+   carries a SHA-384 of the egressed state, never the state itself.
+   *(test: `TestEveryAnswerAndRefusalIsRecordedWithoutTheState`,
+   `TestAnEventWithNoAgentIsSkippedAndCounted`, both in `internal/service`;
+   100% statement coverage on `internal/record`)*
+
+10. **A template is identified by its content digest.** An answer names the
+    version it was asked under (`Template.Version()`, sha256 of the
+    canonical form), and the ledger's `AnswerRecord` carries that version, so
+    `Outcome` scores a later truth against exactly the question that was
+    asked, never against whatever the live registry says today.
+    *(test: `TestAnOutcomeIsScoredAgainstTheVersionItWasAskedUnder` in
+    `internal/service`; mutant: `Outcome` made to re-look-up the current
+    template version instead of using the ledger's recorded one. The first
+    version of this test PASSED against that mutant, because it built a
+    hypothetical changed template and computed its version but never
+    replaced the service's live `Templates` registry, so a mutant reading
+    the registry saw the same v1 by coincidence. Fixed by actually swapping
+    `Service.Templates` for a registry holding the changed template before
+    calling `Outcome`; the mutant now fails it, see the mutation report)*
+
+11. **components.json is true**, both buckets, proved by starting the real
+    binary. *(test: `TestTheManifestMatchesWhatTheBinaryReads` and the rest
+    of `internal/manifest`)*
+
+12. **Every scenario binds to a test and back.**
+    *(gate: `scripts/features-are-bound.sh`)*
+
+13. **README numbers are true.**
+    *(gate: `scripts/readme-numbers.sh`)*
+
+14. **The gates have teeth.**
+    *(gate: `scripts/gates-have-teeth.sh`)*
+
+15. **No real secret ever reaches this repository**, tracked or in history.
+    *(gate: `scripts/no-secrets.sh`)*
+
+### Not built yet
+
+- **Invariant 9 (calibration)**: a probability's calibration is computed per
+  template x backend x model, never pooled across them. This is phase E
+  (`typryx calibration`). Nothing in this phase reads `outcomes.ndjson` for
+  that purpose; it is only written.
+- **Backends other than `stub`**: `jev` (phase D) and `openai-logprobs`
+  (phase C) do not exist. `TYPRYX_BACKEND` set to either refuses to start.
+- **MCP behind tokenfuse's broker**: untested until phase B2. See README.
+
+## Tier
+
+**T2**: this service parses input from outside the process (HTTP and MCP
+request bodies) and is a CLI/HTTP surface another repo will eventually
+consume. It becomes **T3** the day wardryx or tokenfuse actually consume it
+(phase J), per the estate's testing rule; nothing here reaches that bar yet
+because nothing downstream depends on it. No Fable review (paused
+estate-wide); the T2/T3 review for this phase ran as the session model
+reading every diff whole, and mutation testing was still done for the five
+invariants judgement called most load-bearing (2, 3, 6, 7, 10 above) even
+though T2 does not require it, because they are exactly the shapes where a
+wrong answer would be silent.
+
+## Design notes worth keeping visible
+
+- **`internal/door`, not `internal/mcp`.** Both `internal/api` and
+  `internal/mcp` need the credential check, so it is its own package rather
+  than living inside `internal/mcp` (which is where scopyx's equivalent
+  lives, since scopyx has only one surface).
+- **`internal/service` is the one place ask/outcome logic lives.** Both
+  `internal/api` and `internal/mcp` call it and nothing else. This is not
+  incidental: it is the reason
+  `TestTheMCPToolAnswersTheSameAsTheHTTPRoute` is a real comparison rather
+  than two implementations that happen to agree today.
+- **`cmd/typryx` splits `loadConfig` / `buildRuntime` / `run`.** `loadConfig`
+  validates every `TYPRYX_*` variable and returns before anything is opened
+  or bound; `buildRuntime` wires the journal, ledger, service and HTTP
+  server without ever calling `ListenAndServe`; `run` is the thin loop that
+  actually serves and waits for a signal. This is what lets the
+  config-error paths and the wiring be tested in-process and fast, while
+  `run`/`main` themselves (the signal-driven serve loop) are proved instead
+  by `internal/manifest` starting the real binary and by the process-level
+  tests in `cmd/typryx/main_test.go`. Coverage on `cmd/typryx` (74.0%,
+  measured `go test ./cmd/typryx/... -cover`) undercounts on purpose for
+  exactly this reason: `main` and `run` show 0% in that number because a
+  separate `exec.Command`-built binary is not instrumented, even though both
+  are exercised by every process-level test in the package.
+- **Env var check order in `cmd/typryx`**: required configuration
+  (`TYPRYX_BACKEND`, `TYPRYX_TEMPLATES`, including whether the templates
+  directory itself is valid) is checked BEFORE the open-bind refusal. This
+  differs from scopyx, which has no equivalent required-variable check ahead
+  of its bind check. `internal/manifest`'s open-bind matrix always sets both
+  required variables first, so the matrix result does not depend on this
+  ordering; the ordering is simply the simpler one to reason about from a
+  single log line.
+- **State-size check runs before JSON parsing.** `template.Filter` checks the
+  raw byte length against `MaxStateBytes` before calling `json.Unmarshal`, so
+  an oversized hostile payload never reaches the parser.
+
+## Escalate, do not push through
+
+Stop and tell the user, then wait:
+
+- A second backend, a default backend, or enabling any paid backend.
+- Sending a field a template does not name.
+- Turning a probability into a `deny` anywhere, in this repo or a consumer.
+- Registering event types in agent-passport SPEC (phase F).
+- Creating the `TAIPANBOX/typryx` GitHub repository, or any other
+  outward-facing action.
+
+## Conventions
+
+- No long dashes anywhere: not in code comments, docs, commit messages, or PR
+  bodies. Use a comma, a colon, parentheses, or a short hyphen.
+- Nothing paid or metered gets enabled without telling the user first and
+  getting agreement. There is nothing paid in this phase to enable.
+- Do not delete or revoke keys, tokens, or certificates on your own initiative.
