@@ -60,10 +60,16 @@ No claim here is about how fast, cheap, or accurate any vendor's model is; see
 
 ## Install
 
-There is no public repository yet (see [Status](#status)), so `go install` of a tagged
-version is not valid. From a local clone:
+With Go 1.27 (there is no tagged release yet, so this builds `main`):
 
 ```sh
+go install github.com/TAIPANBOX/typryx/cmd/typryx@main
+```
+
+Or from a clone, which also gives you the example templates:
+
+```sh
+git clone https://github.com/TAIPANBOX/typryx && cd typryx
 go build ./cmd/typryx
 ./typryx templates check examples/templates
 ```
@@ -77,7 +83,7 @@ docker run --rm -p 4320:4320 \
   typryx:dev
 ```
 
-Measured 2026-09-25 on this machine: the image builds to **15.7 MB**; with
+Measured 2026-09-25 on a development Mac (Apple Silicon, Docker Desktop): the image builds to **15.7 MB**; with
 `TYPRYX_BACKEND=stub` and `TYPRYX_KEYS` set it answers `/healthz` and a real
 `POST /v1/ask`; run with `TYPRYX_BACKEND=stub` alone, no keys, against the image's own
 wide default bind (`TYPRYX_ADDR=0.0.0.0:4320`), it refuses to start with exit 1, naming
@@ -337,7 +343,7 @@ repository, and is now covered.
   here are not yet a numbered section of that document.
 - **No published image or tag.** The Dockerfile is built and run locally and by CI on
   every push; nothing is pushed to a registry.
-- **The manifest test and the Docker and tokenfuse runs prove behavior on this machine,
+- **The manifest test and the Docker and tokenfuse runs prove behavior on one development Mac,
   on these commits; they are not a claim about any other environment.**
 
 ## Status

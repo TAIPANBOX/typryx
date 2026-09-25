@@ -64,7 +64,7 @@
 
     <rect x="191" y="30" width="46" height="110" rx="3" fill="#283341"/>
     <rect x="191" y="126" width="46" height="14" rx="3" fill="#8b7cf6" opacity="0.6"/>
-    <text x="214" y="154" text-anchor="middle" fill="#9aa7b8">reas</text>
+    <text x="214" y="154" text-anchor="middle" fill="#9aa7b8" font-size="9.5">reasoning</text>
     <text x="214" y="168" text-anchor="middle" fill="#69788b">.14</text>
   </g>
   <text x="124" y="200" text-anchor="middle" font-family="ui-sans-serif,system-ui,sans-serif" font-size="10.5" fill="#69788b">stub backend, measured</text>
