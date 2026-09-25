@@ -185,6 +185,47 @@ if [ "$got" != "pass" ]; then
 fi
 printf "ok  %-56s (%s)\n" "no-secrets: an ordinary new file" "pass"
 
+# --- templates-load.sh -------------------------------------------------------
+
+fault "templates-load: a syntax error in a template file" \
+  examples/templates/eval.outcome_met.json '"id": "eval.outcome_met",' '"id": "eval.outcome_met" THIS IS NOT JSON,' \
+  fail ./scripts/templates-load.sh
+
+fault "templates-load: a template naming user_email in fields" \
+  examples/templates/eval.outcome_met.json '"fields": ["task", "final_answer"],' '"fields": ["task", "final_answer", "user_email"],' \
+  fail ./scripts/templates-load.sh
+
+echo "-- templates-load: the directory emptied --"
+mv examples/templates examples/templates.gate-teeth-hidden
+mkdir examples/templates
+if ./scripts/templates-load.sh >/dev/null 2>&1; then got=pass; else got=fail; fi
+rm -rf examples/templates
+mv examples/templates.gate-teeth-hidden examples/templates
+cases=$((cases + 1))
+if [ "$got" != "fail" ]; then
+  echo "TOOTHLESS: templates-load with the directory emptied -> $got, wanted fail" >&2
+  exit 1
+fi
+printf "ok  %-56s (%s)\n" "templates-load: the directory emptied" "fail"
+
+echo "-- templates-load: a new valid template must not fire the gate --"
+cat > examples/templates/.gate-teeth-extra-template.json <<'JSON'
+{
+  "id": "gate.teeth.extra",
+  "type": "noul",
+  "instructions": "is this a harmless extra starter template",
+  "fields": ["x"]
+}
+JSON
+if ./scripts/templates-load.sh >/dev/null 2>&1; then got=pass; else got=fail; fi
+rm -f examples/templates/.gate-teeth-extra-template.json
+cases=$((cases + 1))
+if [ "$got" != "pass" ]; then
+  echo "TOOTHLESS: templates-load with a new valid template -> $got, wanted pass" >&2
+  exit 1
+fi
+printf "ok  %-56s (%s)\n" "templates-load: a new valid template" "pass"
+
 # --- every gate in scripts/ has a case here ---------------------------------
 
 uncovered=""

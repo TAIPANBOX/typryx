@@ -25,7 +25,7 @@ and are not backported.
 Every change passes the repository's gates before merge: `go build ./...`,
 `go vet ./...`, `gofmt -l .`, `staticcheck ./...`, `go test ./... -race`,
 `./scripts/features-are-bound.sh`, `./scripts/readme-numbers.sh`,
-`./scripts/one-way-out.sh`, `./scripts/no-secrets.sh`,
+`./scripts/one-way-out.sh`, `./scripts/no-secrets.sh`, `./scripts/templates-load.sh`,
 `./scripts/gates-have-teeth.sh`, `govulncheck ./...` and `gosec -quiet ./...`.
 
 ## What this service does not protect against

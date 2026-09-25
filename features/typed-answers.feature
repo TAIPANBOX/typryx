@@ -194,3 +194,27 @@ Feature: Typed answers, as an option a customer adds to the stack
     When the answer is recorded
     Then the recorded model is the version Jev served, not the name that was configured
     And calibration groups by that served version, never by the configured name alone
+
+  # @decided 2026-09-25: typryx is offered in three data modes (without it,
+  # with a local model, with a hosted model), and choosing a hosted backend
+  # is the customer's own explicit decision to send the named fields to a
+  # named processor. See README's "Where your data goes".
+
+  # @test:TestEveryStarterTemplateLoads
+  Scenario: Every starter template loads
+    Given the starter catalog in examples/templates, the same directory the image ships
+    When it is checked
+    Then every template in it loads without error
+    And the catalog holds at least one template
+
+  # @test:TestNoStarterTemplateNamesAnIdentifyingField
+  Scenario: A starter template never asks for an identifying field
+    Given the starter catalog in examples/templates
+    When each template's fields are checked against the identifying-field denylist
+    Then none of them names an email, a name, a phone number, or another field that identifies a person or a customer
+
+  # @test:TestTheServiceRefusesToStartWithoutANamedBackend
+  Scenario: Nothing chooses a backend for the operator
+    Given no TYPRYX_BACKEND is set
+    When the service starts
+    Then it refuses to start rather than picking a default, paid or not

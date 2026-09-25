@@ -7,4 +7,5 @@ gates:
 	./scripts/readme-numbers.sh
 	./scripts/one-way-out.sh
 	./scripts/no-secrets.sh
+	./scripts/templates-load.sh
 	./scripts/gates-have-teeth.sh
