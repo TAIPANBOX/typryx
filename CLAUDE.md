@@ -338,6 +338,11 @@ in the plan.
     test: `TestEveryStarterTemplateLoads`, `TestNoStarterTemplateNamesAnIdentifyingField`,
     both in `internal/template`)*
 
+@decided 2026-09-25: tokenfuse is not changed for typryx. It runs exactly as it
+does without typryx, and typryx joins it through the MCP broker's named-upstream
+configuration alone; the agent behind a brokered call stays on tokenfuse's own
+record, and typryx's journal counts such a call as `skipped_no_agent`.
+
 @decided 2026-09-25: typryx is offered in three data modes: without it (the
 stack runs exactly as before), with a local model (`openai-logprobs` against
 a model server in the customer's own infrastructure, nothing leaves it), and

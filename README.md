@@ -130,7 +130,7 @@ gates that in CI and on every push (CLAUDE.md invariant 28).
 
 ## Connect it
 
-![Four ways to connect: Claude Code, tokenfuse's MCP broker, and plain curl are each measured; stack launchers are planned](docs/connect.svg)
+![Ways to connect: Claude Code, tokenfuse's MCP broker, and plain curl, each measured](docs/connect.svg)
 
 `typryx connect <target>` prints ready-to-paste configuration for one client and
 nothing else, and never prints a real key: it prints `${TYPRYX_KEY}` (or the name given
@@ -189,8 +189,11 @@ upstream with only a content-type header, no credential and no agent identity
 broker, so its own journal skipped that call and counted it
 (`skipped_no_agent` at `GET /healthz`); the agent is on tokenfuse's record, not
 typryx's. Run typryx on loopback or a private network with no `TYPRYX_KEYS` while it
-sits behind this broker. Closing this needs tokenfuse to forward an identity to a named
-upstream, which is not built.
+sits behind this broker.
+
+tokenfuse is not changed for typryx, by decision: it runs exactly as it does without
+typryx, and typryx joins it by the broker configuration above and nothing else. The
+agent behind a brokered call stays on tokenfuse's own record.
 
 **Plain HTTP:**
 
@@ -690,11 +693,12 @@ repository, and is now covered.
   published; `retryDelay`'s 2-second cap is this repository's own choice, not a
   vendor-stated number.
 - **typryx records no agent behind the tokenfuse broker.** The broker forwards no
-  identity to a named upstream; see [Connect it](#connect-it).
-- **No launcher installs this.** stack-single, stack-up, and stack-k8s carry no typryx
-  entry yet.
-- **Not registered in the agent-passport SPEC.** The event types and schema version used
-  here are not yet a numbered section of that document.
+  identity to a named upstream, and tokenfuse is deliberately not changed for typryx;
+  see [Connect it](#connect-it).
+- **The launchers install it only when asked, on the `stub` backend.** stack-single
+  (`WITH_TYPED=1`) and stack-up (`--with-typed`) were run with it on one development Mac;
+  stack-k8s (`deploy.sh --with-typed`) is validated client-side only, no cluster was
+  created for it. None sends typryx's journal to the shared event bus yet.
 - **The manifest test and the Docker and tokenfuse runs prove behavior on one development Mac,
   on these commits; they are not a claim about any other environment.**
 
@@ -713,9 +717,14 @@ repository, and is now covered.
 - [x] **Phase D**: the `jev` backend is built and tested against a replayed wire shape;
       the live call still needs a decision on signing up and spending. See
       [Jev backend](#jev-backend).
-- [ ] **Phase F onward**: the agent-passport registration, launcher wiring (stack-single,
-      stack-up, stack-k8s), and consumers (verdryx, wardryx, tokenfuse's router, costcrew,
-      engram).
+- [x] **Phase F**: the four event types are registered in agent-passport's SPEC 6.2.
+- [x] **Phase G**: opt-in launcher wiring (stack-single, stack-up, stack-k8s) and a
+      fourth starter template with a catalog gate.
+- [x] **Phase H**: verdryx's `typed` grader asks typryx and posts human labels back
+      to `/v1/outcome`.
+- [ ] **Phase I**: a judge bake-off with a live Jev, prepared in verdryx's
+      `examples/bakeoff` and waiting for a Jev key and a spend decision.
+- [ ] **Deeper consumers** (wardryx, tokenfuse's router, costcrew, engram), only if
+      phase I shows they are worth it.
 
-Next: the live Jev run (needs a spend decision first), then the agent-passport
-registration (phase F).
+Next: the live Jev run, which needs a spend decision first.
