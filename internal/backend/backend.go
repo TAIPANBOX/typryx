@@ -40,6 +40,14 @@ type Question struct {
 	// default, e.g. "yes"/"no").
 	NoulTrueDesc  string
 	NoulFalseDesc string
+	// NoulCriteriaGiven is true when the template explicitly set noul
+	// criteria (NoulTrueDesc/NoulFalseDesc came from the template's own
+	// criteria object, not from the zero value). A backend that must tell
+	// "the template said nothing" apart from "the template said the empty
+	// string" (the jev backend sends no criteria field at all in the first
+	// case, an explicit object in the second) reads this instead of
+	// inferring it from NoulTrueDesc/NoulFalseDesc being empty.
+	NoulCriteriaGiven bool
 }
 
 // Answer is what a backend answered.

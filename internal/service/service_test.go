@@ -981,3 +981,59 @@ func TestAnAnsweredAskLedgersItsProbabilities(t *testing.T) {
 		t.Errorf("expected the served noul answer to be probabilities[true]=0.7, got %v", answer)
 	}
 }
+
+// @test:TestNoulCriteriaGivenReflectsWhetherTheTemplateSetAny
+//
+// The jev backend must send noul criteria only when a template actually
+// named any, and omit the field entirely otherwise (the wire shape treats
+// "no criteria" and "criteria of empty strings" as different facts). Before
+// this test, questionFor discarded template.NoulCriteria's own ok result
+// (assigned to _), so backend.Question had no way to tell the two apart; run
+// against that code, this test failed because NoulCriteriaGiven was always
+// false, including for a template that set explicit criteria.
+func TestNoulCriteriaGivenReflectsWhetherTheTemplateSetAny(t *testing.T) {
+	t.Run("no criteria at all", func(t *testing.T) {
+		tb := &backendtest.Backend{Mode: backendtest.ModeOK, Answer: backend.Answer{
+			Probabilities: map[string]float64{"true": 0.5, "false": 0.5}, Model: "test-0",
+		}}
+		d := newService(t, noulTemplate("task"), tb)
+		_, refusal := d.Service.Ask(context.Background(), service.Caller{AgentID: "a"},
+			service.AskRequest{Template: "eval.outcome_met", State: json.RawMessage(`{"task":"t"}`)})
+		if refusal != nil {
+			t.Fatalf("unexpected refusal: %+v", refusal)
+		}
+		if len(tb.Asked) != 1 {
+			t.Fatalf("expected 1 call, got %d", len(tb.Asked))
+		}
+		if tb.Asked[0].Question.NoulCriteriaGiven {
+			t.Error("expected NoulCriteriaGiven false for a template with no criteria")
+		}
+	})
+
+	t.Run("explicit criteria", func(t *testing.T) {
+		tmpl := template.Template{
+			ID: "eval.outcome_met", Type: template.TypeNoul, Instructions: "did it work",
+			Criteria: json.RawMessage(`{"true":"yes it did","false":"no it did not"}`),
+			Fields:   []string{"task"},
+		}
+		tb := &backendtest.Backend{Mode: backendtest.ModeOK, Answer: backend.Answer{
+			Probabilities: map[string]float64{"true": 0.5, "false": 0.5}, Model: "test-0",
+		}}
+		d := newService(t, tmpl, tb)
+		_, refusal := d.Service.Ask(context.Background(), service.Caller{AgentID: "a"},
+			service.AskRequest{Template: "eval.outcome_met", State: json.RawMessage(`{"task":"t"}`)})
+		if refusal != nil {
+			t.Fatalf("unexpected refusal: %+v", refusal)
+		}
+		if len(tb.Asked) != 1 {
+			t.Fatalf("expected 1 call, got %d", len(tb.Asked))
+		}
+		q := tb.Asked[0].Question
+		if !q.NoulCriteriaGiven {
+			t.Error("expected NoulCriteriaGiven true for a template with explicit criteria")
+		}
+		if q.NoulTrueDesc != "yes it did" || q.NoulFalseDesc != "no it did not" {
+			t.Errorf("unexpected descriptions: %q / %q", q.NoulTrueDesc, q.NoulFalseDesc)
+		}
+	})
+}

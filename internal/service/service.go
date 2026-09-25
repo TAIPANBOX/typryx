@@ -508,12 +508,13 @@ func questionFor(t template.Template) (backend.Question, []string, error) {
 		}
 		return q, keys, nil
 	case template.TypeNoul:
-		trueDesc, falseDesc, _, err := t.NoulCriteria()
+		trueDesc, falseDesc, given, err := t.NoulCriteria()
 		if err != nil {
 			return q, nil, err
 		}
 		q.NoulTrueDesc = trueDesc
 		q.NoulFalseDesc = falseDesc
+		q.NoulCriteriaGiven = given
 		return q, []string{"true", "false"}, nil
 	}
 	return q, nil, fmt.Errorf("unknown template type %q", t.Type)
