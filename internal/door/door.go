@@ -13,6 +13,7 @@ import (
 	"crypto/subtle"
 	"fmt"
 	"net"
+	"regexp"
 	"strings"
 )
 
@@ -63,6 +64,28 @@ func (k Keys) Identity(presented string) string {
 		return ""
 	}
 	return k.identity[presented]
+}
+
+// Identities returns every identity bound to a credential, never the
+// credentials themselves. A credential with no bound identity is not
+// included. For an operator to validate at startup: see ValidIdentity.
+func (k Keys) Identities() []string {
+	out := make([]string, 0, len(k.identity))
+	for _, id := range k.identity {
+		out = append(out, id)
+	}
+	return out
+}
+
+// identityPattern is agent://<non-empty host>/<non-empty path>, agent-passport's own shape.
+var identityPattern = regexp.MustCompile(`^agent://[^/]+/.+$`)
+
+// ValidIdentity reports whether id is a well-formed agent:// identity. A
+// credential bound to anything else would have that value written as
+// agent_id on every event and answer it produces, unattested and not even
+// shaped like the thing agent-passport's SPEC calls an identity.
+func ValidIdentity(id string) bool {
+	return identityPattern.MatchString(id)
 }
 
 // Configured reports whether any credential is required.

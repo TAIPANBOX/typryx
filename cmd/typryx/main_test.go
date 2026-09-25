@@ -511,6 +511,35 @@ func TestTheServiceRefusesToStartWithoutANamedBackend(t *testing.T) {
 	}
 }
 
+// @test:TestAKeyBoundToANonAgentIdentityRefusesToStart
+//
+// TYPRYX_KEYS="cred=bob" binds a real credential to an identity that is not
+// an agent:// URI at all; that identity is what the journal would then write
+// as agent_id on every event, unattested. Refuse to start naming TYPRYX_KEYS
+// and the malformed identity, and never echo the credential itself into any
+// output.
+func TestAKeyBoundToANonAgentIdentityRefusesToStart(t *testing.T) {
+	if testing.Short() {
+		t.Skip("starts a process")
+	}
+	bin := buildBinary(t)
+	templatesDir := validTemplatesDirForTest(t)
+	const credential = "th15-is-th3-s3cr3t-cred3nt1al"
+	code, out := runBin(t, bin, []string{
+		"TYPRYX_BACKEND=stub", "TYPRYX_TEMPLATES=" + templatesDir, "TYPRYX_ADDR=127.0.0.1:0",
+		"TYPRYX_KEYS=" + credential + "=bob",
+	})
+	if code != 2 {
+		t.Fatalf("expected exit 2 for a key bound to a non-agent identity, got %d\n%s", code, out)
+	}
+	if !strings.Contains(out, "TYPRYX_KEYS") {
+		t.Errorf("expected the failure to name TYPRYX_KEYS, got %s", out)
+	}
+	if strings.Contains(out, credential) {
+		t.Errorf("the credential itself must never appear in the output, got %s", out)
+	}
+}
+
 func TestUnknownSubcommandExitsTwo(t *testing.T) {
 	if testing.Short() {
 		t.Skip("starts a process")

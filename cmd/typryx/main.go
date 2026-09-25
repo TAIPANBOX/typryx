@@ -165,6 +165,17 @@ func loadConfig() (*config, error) {
 
 	addr := envOr("TYPRYX_ADDR", defaultAddr)
 	keys := door.ParseKeys(os.Getenv("TYPRYX_KEYS"))
+	// A credential bound to anything that is not a well-formed agent://
+	// identity would have that value written as agent_id on every event and
+	// answer it produces: never the credential itself in this message, only
+	// the (non-secret) identity it was bound to.
+	for _, id := range keys.Identities() {
+		if !door.ValidIdentity(id) {
+			return nil, &configError{msg: fmt.Sprintf(
+				"TYPRYX_KEYS binds a credential to %q, which is not a well-formed agent:// identity "+
+					"(need agent://<host>/<path>); refusing to start", id)}
+		}
+	}
 	allowOpenBind := door.TruthyEnv(os.Getenv("TYPRYX_ALLOW_OPEN_BIND"))
 	allowFreeform := door.TruthyEnv(os.Getenv("TYPRYX_ALLOW_FREEFORM"))
 
