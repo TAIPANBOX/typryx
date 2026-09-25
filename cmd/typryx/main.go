@@ -62,8 +62,11 @@ func main() {
 	if len(args) >= 1 && args[0] == "connect" {
 		os.Exit(connectCmd(args[1:], os.Stdout, os.Stderr))
 	}
+	if len(args) >= 1 && args[0] == "calibration" {
+		os.Exit(calibrationCmd(args[1:], os.Stdout, os.Stderr))
+	}
 	if len(args) >= 1 && args[0] != "serve" {
-		fmt.Fprintf(os.Stderr, "typryx: unknown subcommand %q. Known: serve (the default), templates check <dir>, connect <target>\n", args[0])
+		fmt.Fprintf(os.Stderr, "typryx: unknown subcommand %q. Known: serve (the default), templates check <dir>, connect <target>, calibration\n", args[0])
 		os.Exit(2)
 	}
 
