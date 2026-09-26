@@ -9,6 +9,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/TAIPANBOX/typryx/internal/api"
@@ -274,6 +275,51 @@ func TestAskFreeformToolAnswersWhenSwitchedOn(t *testing.T) {
 	structured := result["structuredContent"].(map[string]any)
 	if structured["template"] != "freeform" {
 		t.Errorf("expected template freeform, got %v", structured["template"])
+	}
+}
+
+// @test:TestAskToolRejectsABadRunID
+func TestAskToolRejectsABadRunID(t *testing.T) {
+	ts, _ := newTestStack(t, false)
+	out := rpcCall(t, ts, "tools/call", "k1", map[string]any{
+		"name": "ask",
+		"arguments": map[string]any{
+			"template": "eval.outcome_met", "state": map[string]any{"task": "t"},
+			"run_id": "before\nafter",
+		},
+	})
+	result, ok := out["result"].(map[string]any)
+	if !ok {
+		t.Fatalf("expected a result, got %v", out)
+	}
+	if result["isError"] != true {
+		t.Fatalf("expected isError true for a control-character run_id, got %v", result)
+	}
+	structured, ok := result["structuredContent"].(map[string]any)
+	if !ok {
+		t.Fatalf("expected structuredContent, got %v", result)
+	}
+	if structured["error"] != "bad_run_id" {
+		t.Errorf("expected error bad_run_id, got %v", structured["error"])
+	}
+}
+
+// @test:TestAskFreeformToolRejectsABadRunID
+func TestAskFreeformToolRejectsABadRunID(t *testing.T) {
+	ts, _ := newTestStack(t, true)
+	out := rpcCall(t, ts, "tools/call", "k1", map[string]any{
+		"name": "ask_freeform",
+		"arguments": map[string]any{
+			"type": "noul", "instructions": "is it true", "state": map[string]any{"x": 1},
+			"run_id": strings.Repeat("a", 129),
+		},
+	})
+	result, ok := out["result"].(map[string]any)
+	if !ok {
+		t.Fatalf("expected a result, got %v", out)
+	}
+	if result["isError"] != true {
+		t.Fatalf("expected isError true for an over-length run_id, got %v", result)
 	}
 }
 

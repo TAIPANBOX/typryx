@@ -29,11 +29,12 @@ func newJevBackend(baseURL, apiKey string) *Jev {
 // (status, body, headers), recording every request it received.
 type jevServer struct {
 	*httptest.Server
-	responses []jevResponseFixture
-	requests  atomic.Int64
-	times     []time.Time
-	lastBody  []byte
-	lastAuth  string
+	responses   []jevResponseFixture
+	requests    atomic.Int64
+	times       []time.Time
+	lastBody    []byte
+	lastAuth    string
+	lastHeaders http.Header
 }
 
 type jevResponseFixture struct {
@@ -49,6 +50,7 @@ func newJevServer(t *testing.T, responses ...jevResponseFixture) *jevServer {
 		js.times = append(js.times, time.Now())
 		n := js.requests.Add(1)
 		js.lastAuth = r.Header.Get("Authorization")
+		js.lastHeaders = r.Header.Clone()
 		b, _ := readAll(r)
 		js.lastBody = b
 		if r.URL.Path != "/systemone" {
@@ -111,6 +113,35 @@ func scoreQ() Question {
 func noulQ(given bool, trueDesc, falseDesc string) Question {
 	return Question{Key: "q", Type: template.TypeNoul, Instructions: "is it urgent",
 		NoulCriteriaGiven: given, NoulTrueDesc: trueDesc, NoulFalseDesc: falseDesc}
+}
+
+// @test:TestJevNeverForwardsRunIDOrAgentID
+//
+// jev.go's own wire types (jevRequest, jevQuestionWire) carry no run_id or
+// agent_id field at all, so this backend cannot leak either one even by
+// omission; this test proves it behaviourally too, since a wire-shape
+// argument only proves what CAN'T happen through the shape as written, not
+// that nobody ever wires a header up beside it. Question.RunID/AgentID are
+// identity metadata every backend receives (internal/service.ask sets them
+// unconditionally); jev is the one backend that reads neither.
+func TestJevNeverForwardsRunIDOrAgentID(t *testing.T) {
+	body := okJevBody(t, "m", map[string]any{"type": "noul", "noul": 0.5}, 10, 10)
+	srv := newJevServer(t, jevResponseFixture{Status: 200, Body: body})
+	o := newJevBackend(srv.URL, "k")
+	q := noulQ(false, "", "")
+	q.RunID = "a-run-id-that-must-never-appear"
+	q.AgentID = "agent://acme.example/must-never-appear"
+	if _, _, err := o.Ask(context.Background(), q, template.Egress{}); err != nil {
+		t.Fatalf("Ask: %v", err)
+	}
+	if strings.Contains(string(srv.lastBody), "must-never-appear") {
+		t.Errorf("the run id or agent id leaked into the request body: %s", srv.lastBody)
+	}
+	for _, h := range []string{"X-Fuse-Run-Id", "X-Fuse-Agent-Id", "Run-Id", "Agent-Id"} {
+		if v := srv.lastHeaders.Get(h); v != "" {
+			t.Errorf("expected no %s header from the jev backend, got %q", h, v)
+		}
+	}
 }
 
 // --- TestTheDocumentedExampleResponseMapsToOurKeys --------------------------

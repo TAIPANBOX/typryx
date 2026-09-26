@@ -118,15 +118,33 @@ type config struct {
 	ledgerDir       string
 	openai          *openaiBackendConfig
 	jev             *jevBackendConfig
+	// maxUsdPerDay is nil when TYPRYX_MAX_USD_PER_DAY is unset (no daily
+	// USD cap at all), and points to the parsed value otherwise: 0 is the
+	// explicit disabled state (a boot warning, like TYPRYX_MAX_CALLS_PER_HOUR=0),
+	// a positive value is the cap itself, and negative is rejected in
+	// loadConfig before this is ever built.
+	maxUsdPerDay *float64
 }
 
 // openaiBackendConfig is the validated TYPRYX_OPENAI_* configuration, set
 // only when TYPRYX_BACKEND=openai-logprobs.
 type openaiBackendConfig struct {
-	url          string
-	model        string
-	key          string
-	minLabelMass float64
+	url                string
+	model              string
+	key                string
+	minLabelMass       float64
+	meterHeaders       bool
+	defaultRunID       string
+	priceInputPerMTok  float64
+	priceOutputPerMTok float64
+}
+
+// isUnpriced reports whether this backend config's own prices would leave
+// cost_usd always 0. Used only to refuse an unpriced backend combined with a
+// nonzero TYPRYX_MAX_USD_PER_DAY: a cap over a backend that reports no cost
+// measures nothing.
+func (c *openaiBackendConfig) isUnpriced() bool {
+	return c.priceInputPerMTok == 0 && c.priceOutputPerMTok == 0
 }
 
 const defaultOpenAIMinLabelMass = 0.9
@@ -139,6 +157,11 @@ type jevBackendConfig struct {
 	key                string
 	priceInputPerMTok  float64
 	priceOutputPerMTok float64
+}
+
+// isUnpriced mirrors openaiBackendConfig.isUnpriced: see its doc comment.
+func (c *jevBackendConfig) isUnpriced() bool {
+	return c.priceInputPerMTok == 0 && c.priceOutputPerMTok == 0
 }
 
 const (
@@ -215,6 +238,25 @@ func envFloat(name string, fallback float64) (float64, error) {
 	return f, nil
 }
 
+// envFloatPtr reads name as a float64 pointer: nil when the variable is
+// unset at all (its own "no such thing" state, as opposed to an explicit
+// 0), otherwise a pointer to the parsed value. Used only for
+// TYPRYX_MAX_USD_PER_DAY, where unset and 0 mean two different things (no
+// cap at all, versus a cap explicitly disabled with a boot warning); every
+// other float here has a real numeric default and uses envFloat instead. A
+// malformed value refuses by name rather than silently falling back.
+func envFloatPtr(name string) (*float64, error) {
+	v := os.Getenv(name)
+	if v == "" {
+		return nil, nil
+	}
+	f, err := strconv.ParseFloat(v, 64)
+	if err != nil {
+		return nil, badVar(name, v, "must be a number")
+	}
+	return &f, nil
+}
+
 // loadOpenAIConfig reads and validates the TYPRYX_OPENAI_* variables, which
 // are required only when TYPRYX_BACKEND=openai-logprobs (a "required when
 // chosen" shape components.json declares as required:false plus a
@@ -257,7 +299,36 @@ func loadOpenAIConfig() (*openaiBackendConfig, error) {
 		minLabelMass = v
 	}
 
-	return &openaiBackendConfig{url: rawURL, model: model, key: key, minLabelMass: minLabelMass}, nil
+	meterHeaders := door.TruthyEnv(os.Getenv("TYPRYX_OPENAI_METER_HEADERS"))
+
+	defaultRunID := os.Getenv("TYPRYX_OPENAI_RUN_ID")
+	if !door.ValidRunID(defaultRunID) {
+		return nil, badVar("TYPRYX_OPENAI_RUN_ID", defaultRunID,
+			"must be at most 128 bytes with no control characters")
+	}
+
+	priceIn, err := envFloat("TYPRYX_OPENAI_PRICE_PER_MTOK_INPUT", 0)
+	if err != nil {
+		return nil, err
+	}
+	if priceIn < 0 {
+		return nil, badVar("TYPRYX_OPENAI_PRICE_PER_MTOK_INPUT", strconv.FormatFloat(priceIn, 'g', -1, 64),
+			"must not be negative")
+	}
+	priceOut, err := envFloat("TYPRYX_OPENAI_PRICE_PER_MTOK_OUTPUT", 0)
+	if err != nil {
+		return nil, err
+	}
+	if priceOut < 0 {
+		return nil, badVar("TYPRYX_OPENAI_PRICE_PER_MTOK_OUTPUT", strconv.FormatFloat(priceOut, 'g', -1, 64),
+			"must not be negative")
+	}
+
+	return &openaiBackendConfig{
+		url: rawURL, model: model, key: key, minLabelMass: minLabelMass,
+		meterHeaders: meterHeaders, defaultRunID: defaultRunID,
+		priceInputPerMTok: priceIn, priceOutputPerMTok: priceOut,
+	}, nil
 }
 
 // loadConfig reads and validates every TYPRYX_ variable. It is checked in the
@@ -330,6 +401,28 @@ func loadConfig() (*config, error) {
 			"must be a positive whole number of milliseconds; there is no uncapped-deadline opt-out")
 	}
 
+	// nil means TYPRYX_MAX_USD_PER_DAY is unset: no daily USD cap at all, not
+	// even the "0, disabled, with a warning" state the hourly cap's own 0
+	// means. That state exists here too, spelled by an explicit "0".
+	maxUsdPerDay, err := envFloatPtr("TYPRYX_MAX_USD_PER_DAY")
+	if err != nil {
+		return nil, err
+	}
+	if maxUsdPerDay != nil && *maxUsdPerDay < 0 {
+		return nil, badVar("TYPRYX_MAX_USD_PER_DAY", strconv.FormatFloat(*maxUsdPerDay, 'g', -1, 64),
+			"must be 0 (the explicit disabled state) or a positive number of US dollars")
+	}
+	// A cap on a backend that always reports cost_usd 0 measures nothing: it
+	// would sit there looking like a real ceiling while nothing ever moves
+	// it. Refuse to start rather than let an operator believe an unpriced
+	// deployment is bounded.
+	if maxUsdPerDay != nil && *maxUsdPerDay > 0 && backendIsUnpriced(backendName, openaiCfg, jevCfg) {
+		return nil, &configError{msg: fmt.Sprintf(
+			"TYPRYX_MAX_USD_PER_DAY=%s is set, but backend %s is unpriced (cost_usd is always 0): "+
+				"a spend cap over a backend that reports no cost measures nothing. Configure a price "+
+				"or unset TYPRYX_MAX_USD_PER_DAY.", strconv.FormatFloat(*maxUsdPerDay, 'g', -1, 64), backendName)}
+	}
+
 	addr := envOr("TYPRYX_ADDR", defaultAddr)
 	keys := door.ParseKeys(os.Getenv("TYPRYX_KEYS"))
 	// A credential bound to anything that is not a well-formed agent://
@@ -355,8 +448,23 @@ func loadConfig() (*config, error) {
 		backendName: backendName, templatesDir: templatesDir, templates: reg,
 		maxCallsPerHour: maxCallsPerHour, timeoutMS: timeoutMS,
 		eventsPath: os.Getenv("TYPRYX_EVENTS"), ledgerDir: os.Getenv("TYPRYX_LEDGER_DIR"),
-		openai: openaiCfg, jev: jevCfg,
+		openai: openaiCfg, jev: jevCfg, maxUsdPerDay: maxUsdPerDay,
 	}, nil
+}
+
+// backendIsUnpriced reports whether the named backend, configured as given,
+// would report cost_usd 0 for every call: stub always does (it has no price
+// configuration at all), and openai-logprobs/jev do exactly when both of
+// their own configured prices are 0 (the default, meaning "unpriced").
+func backendIsUnpriced(name string, openaiCfg *openaiBackendConfig, jevCfg *jevBackendConfig) bool {
+	switch name {
+	case "openai-logprobs":
+		return openaiCfg.isUnpriced()
+	case "jev":
+		return jevCfg.isUnpriced()
+	default:
+		return true
+	}
 }
 
 // runtime is what buildRuntime assembled: the HTTP server ready to listen,
@@ -399,12 +507,19 @@ func buildRuntime(cfg *config, log *slog.Logger) (*runtime, error) {
 	svc.Templates = cfg.templates
 	switch cfg.backendName {
 	case "openai-logprobs":
+		if cfg.openai.meterHeaders {
+			log.Info("typryx openai-logprobs metering headers are ON: x-fuse-run-id and x-fuse-agent-id will be sent to TYPRYX_OPENAI_URL")
+		}
 		svc.Backend = backend.NewOpenAI(backend.OpenAIConfig{
-			BaseURL:      cfg.openai.url,
-			Model:        cfg.openai.model,
-			APIKey:       cfg.openai.key,
-			MinLabelMass: cfg.openai.minLabelMass,
-			Logger:       log,
+			BaseURL:            cfg.openai.url,
+			Model:              cfg.openai.model,
+			APIKey:             cfg.openai.key,
+			MinLabelMass:       cfg.openai.minLabelMass,
+			MeterHeaders:       cfg.openai.meterHeaders,
+			DefaultRunID:       cfg.openai.defaultRunID,
+			PriceInputPerMTok:  cfg.openai.priceInputPerMTok,
+			PriceOutputPerMTok: cfg.openai.priceOutputPerMTok,
+			Logger:             log,
 		})
 	case "jev":
 		// The URL was already validated by loadJevConfig; re-parsing it here
@@ -424,6 +539,13 @@ func buildRuntime(cfg *config, log *slog.Logger) (*runtime, error) {
 		svc.Backend = backend.Stub{}
 	}
 	svc.Cap = service.NewCap(cfg.maxCallsPerHour)
+	if cfg.maxUsdPerDay != nil {
+		if *cfg.maxUsdPerDay <= 0 {
+			log.Warn("this deployment has NO daily USD spend cap; TYPRYX_MAX_USD_PER_DAY=0 disables it deliberately")
+		} else {
+			svc.UsdCap = service.NewUsdCap(*cfg.maxUsdPerDay)
+		}
+	}
 	svc.Ledger = led
 	svc.Journal = journal
 	svc.Timeout = time.Duration(cfg.timeoutMS) * time.Millisecond
@@ -444,6 +566,7 @@ func buildRuntime(cfg *config, log *slog.Logger) (*runtime, error) {
 		"journal", journalState(cfg.eventsPath),
 		"ledger", ledgerState(cfg.ledgerDir),
 		"calls_per_hour", capState(cfg.maxCallsPerHour),
+		"usd_per_day", usdCapState(cfg.maxUsdPerDay),
 		"freeform", cfg.allowFreeform)
 
 	return &runtime{server: srv, journal: journal, ledger: led}, nil
@@ -557,6 +680,21 @@ func capState(n int64) string {
 		return "UNCAPPED"
 	}
 	return strconv.FormatInt(n, 10)
+}
+
+// usdCapState renders TYPRYX_MAX_USD_PER_DAY's three-way state for the
+// startup log line: nil (unset) and <= 0 (explicitly disabled) are both
+// "no cap enforced", but distinguishable in the log by which word is used,
+// since an operator reading a log line should be able to tell "I never set
+// this" from "I set this to 0 on purpose" without opening the config.
+func usdCapState(v *float64) string {
+	if v == nil {
+		return "UNSET"
+	}
+	if *v <= 0 {
+		return "DISABLED"
+	}
+	return strconv.FormatFloat(*v, 'g', -1, 64)
 }
 
 func joinSemicolon(ss []string) string {

@@ -350,6 +350,332 @@ func TestBuildRuntimeWiresTheOpenAIBackendWhenChosen(t *testing.T) {
 	}
 }
 
+// --- TYPRYX_OPENAI_METER_HEADERS / TYPRYX_OPENAI_RUN_ID ---------------------
+
+func TestLoadConfigDefaultsMeterHeadersOffAndRunIDEmpty(t *testing.T) {
+	clearTyprxEnv(t)
+	setEnv(t, openAIWorkingEnv(t, ""))
+	cfg, err := loadConfig()
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if cfg.openai.meterHeaders {
+		t.Error("expected TYPRYX_OPENAI_METER_HEADERS to default to off")
+	}
+	if cfg.openai.defaultRunID != "" {
+		t.Errorf("expected an empty default run id, got %q", cfg.openai.defaultRunID)
+	}
+}
+
+func TestLoadConfigAcceptsMeterHeadersOn(t *testing.T) {
+	clearTyprxEnv(t)
+	env := openAIWorkingEnv(t, "")
+	env["TYPRYX_OPENAI_METER_HEADERS"] = "1"
+	env["TYPRYX_OPENAI_RUN_ID"] = "operator-configured-run-id"
+	setEnv(t, env)
+	cfg, err := loadConfig()
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !cfg.openai.meterHeaders {
+		t.Error("expected TYPRYX_OPENAI_METER_HEADERS=1 to switch metering headers on")
+	}
+	if cfg.openai.defaultRunID != "operator-configured-run-id" {
+		t.Errorf("unexpected default run id: %q", cfg.openai.defaultRunID)
+	}
+}
+
+func TestLoadConfigMeterHeadersOnlyTrueAndOneCount(t *testing.T) {
+	for _, v := range []string{"0", "false", "no", "yes", "on"} {
+		t.Run(v, func(t *testing.T) {
+			clearTyprxEnv(t)
+			env := openAIWorkingEnv(t, "")
+			env["TYPRYX_OPENAI_METER_HEADERS"] = v
+			setEnv(t, env)
+			cfg, err := loadConfig()
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			if cfg.openai.meterHeaders {
+				t.Errorf("TYPRYX_OPENAI_METER_HEADERS=%q must not count as true", v)
+			}
+		})
+	}
+}
+
+// @test:TestLoadConfigRejectsABadDefaultRunID
+func TestLoadConfigRejectsABadDefaultRunID(t *testing.T) {
+	clearTyprxEnv(t)
+	env := openAIWorkingEnv(t, "")
+	env["TYPRYX_OPENAI_RUN_ID"] = strings.Repeat("a", 129)
+	setEnv(t, env)
+	_, err := loadConfig()
+	if err == nil || !strings.Contains(err.Error(), "TYPRYX_OPENAI_RUN_ID") {
+		t.Fatalf("expected an error naming TYPRYX_OPENAI_RUN_ID, got %v", err)
+	}
+}
+
+// --- TYPRYX_OPENAI_PRICE_PER_MTOK_INPUT / _OUTPUT ---------------------------
+
+func TestLoadConfigDefaultsOpenAIPricesToZero(t *testing.T) {
+	clearTyprxEnv(t)
+	setEnv(t, openAIWorkingEnv(t, ""))
+	cfg, err := loadConfig()
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if cfg.openai.priceInputPerMTok != 0 || cfg.openai.priceOutputPerMTok != 0 {
+		t.Errorf("expected both prices to default to 0 (unpriced), got in=%v out=%v",
+			cfg.openai.priceInputPerMTok, cfg.openai.priceOutputPerMTok)
+	}
+}
+
+func TestLoadConfigAcceptsConfiguredOpenAIPrices(t *testing.T) {
+	clearTyprxEnv(t)
+	env := openAIWorkingEnv(t, "")
+	env["TYPRYX_OPENAI_PRICE_PER_MTOK_INPUT"] = "0.03"
+	env["TYPRYX_OPENAI_PRICE_PER_MTOK_OUTPUT"] = "0.06"
+	setEnv(t, env)
+	cfg, err := loadConfig()
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if cfg.openai.priceInputPerMTok != 0.03 || cfg.openai.priceOutputPerMTok != 0.06 {
+		t.Errorf("unexpected prices: in=%v out=%v", cfg.openai.priceInputPerMTok, cfg.openai.priceOutputPerMTok)
+	}
+}
+
+func TestLoadConfigRejectsANegativeOpenAIPrice(t *testing.T) {
+	for _, name := range []string{"TYPRYX_OPENAI_PRICE_PER_MTOK_INPUT", "TYPRYX_OPENAI_PRICE_PER_MTOK_OUTPUT"} {
+		t.Run(name, func(t *testing.T) {
+			clearTyprxEnv(t)
+			env := openAIWorkingEnv(t, "")
+			env[name] = "-0.01"
+			setEnv(t, env)
+			_, err := loadConfig()
+			if err == nil || !strings.Contains(err.Error(), name) {
+				t.Fatalf("expected an error naming %s, got %v", name, err)
+			}
+		})
+	}
+}
+
+func TestBuildRuntimeWiresOpenAIMeterHeadersPricesAndRunID(t *testing.T) {
+	clearTyprxEnv(t)
+	env := openAIWorkingEnv(t, "")
+	env["TYPRYX_OPENAI_METER_HEADERS"] = "1"
+	env["TYPRYX_OPENAI_RUN_ID"] = "default-run-id"
+	env["TYPRYX_OPENAI_PRICE_PER_MTOK_INPUT"] = "0.03"
+	env["TYPRYX_OPENAI_PRICE_PER_MTOK_OUTPUT"] = "0.06"
+	setEnv(t, env)
+	cfg, err := loadConfig()
+	if err != nil {
+		t.Fatalf("loadConfig: %v", err)
+	}
+	rt, err := buildRuntime(cfg, testLogger())
+	if err != nil {
+		t.Fatalf("buildRuntime: %v", err)
+	}
+	defer rt.journal.Close()
+	if rt.server == nil {
+		t.Fatal("expected a server")
+	}
+}
+
+// --- TYPRYX_MAX_USD_PER_DAY --------------------------------------------------
+
+// @test:TestLoadConfigDefaultsMaxUsdPerDayToUnset
+func TestLoadConfigDefaultsMaxUsdPerDayToUnset(t *testing.T) {
+	clearTyprxEnv(t)
+	setEnv(t, map[string]string{"TYPRYX_BACKEND": "stub", "TYPRYX_TEMPLATES": validTemplatesDirForTest(t)})
+	cfg, err := loadConfig()
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if cfg.maxUsdPerDay != nil {
+		t.Errorf("expected TYPRYX_MAX_USD_PER_DAY to default to unset (nil), got %v", *cfg.maxUsdPerDay)
+	}
+}
+
+func TestLoadConfigAcceptsAPositiveMaxUsdPerDayOnAPricedBackend(t *testing.T) {
+	clearTyprxEnv(t)
+	env := openAIWorkingEnv(t, "")
+	env["TYPRYX_OPENAI_PRICE_PER_MTOK_INPUT"] = "0.03"
+	env["TYPRYX_MAX_USD_PER_DAY"] = "5"
+	setEnv(t, env)
+	cfg, err := loadConfig()
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if cfg.maxUsdPerDay == nil || *cfg.maxUsdPerDay != 5 {
+		t.Fatalf("expected maxUsdPerDay 5, got %v", cfg.maxUsdPerDay)
+	}
+}
+
+func TestLoadConfigRejectsANegativeMaxUsdPerDay(t *testing.T) {
+	clearTyprxEnv(t)
+	env := openAIWorkingEnv(t, "")
+	env["TYPRYX_MAX_USD_PER_DAY"] = "-1"
+	setEnv(t, env)
+	_, err := loadConfig()
+	if err == nil || !strings.Contains(err.Error(), "TYPRYX_MAX_USD_PER_DAY") {
+		t.Fatalf("expected an error naming TYPRYX_MAX_USD_PER_DAY, got %v", err)
+	}
+}
+
+func TestLoadConfigRejectsAMalformedMaxUsdPerDay(t *testing.T) {
+	clearTyprxEnv(t)
+	env := openAIWorkingEnv(t, "")
+	env["TYPRYX_MAX_USD_PER_DAY"] = "expensive"
+	setEnv(t, env)
+	_, err := loadConfig()
+	if err == nil || !strings.Contains(err.Error(), "TYPRYX_MAX_USD_PER_DAY") {
+		t.Fatalf("expected an error naming TYPRYX_MAX_USD_PER_DAY, got %v", err)
+	}
+}
+
+func TestLoadConfigAcceptsMaxUsdPerDayZeroAsExplicitlyDisabled(t *testing.T) {
+	clearTyprxEnv(t)
+	// 0 on an UNPRICED backend (stub) must still be accepted: 0 never enables
+	// the cap, so the unpriced-backend refusal never triggers for it.
+	env := map[string]string{"TYPRYX_BACKEND": "stub", "TYPRYX_TEMPLATES": validTemplatesDirForTest(t)}
+	env["TYPRYX_MAX_USD_PER_DAY"] = "0"
+	setEnv(t, env)
+	cfg, err := loadConfig()
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if cfg.maxUsdPerDay == nil || *cfg.maxUsdPerDay != 0 {
+		t.Fatalf("expected maxUsdPerDay 0, got %v", cfg.maxUsdPerDay)
+	}
+}
+
+// @test:TestLoadConfigRefusesAPositiveMaxUsdPerDayOnTheStubBackend
+func TestLoadConfigRefusesAPositiveMaxUsdPerDayOnTheStubBackend(t *testing.T) {
+	clearTyprxEnv(t)
+	env := map[string]string{"TYPRYX_BACKEND": "stub", "TYPRYX_TEMPLATES": validTemplatesDirForTest(t)}
+	env["TYPRYX_MAX_USD_PER_DAY"] = "5"
+	setEnv(t, env)
+	_, err := loadConfig()
+	if err == nil || !strings.Contains(err.Error(), "TYPRYX_MAX_USD_PER_DAY") || !strings.Contains(err.Error(), "unpriced") {
+		t.Fatalf("expected an error naming TYPRYX_MAX_USD_PER_DAY and 'unpriced', got %v", err)
+	}
+	var cfgErr *configError
+	if !isConfigError(err, &cfgErr) {
+		t.Error("a cap over an unpriced backend should be a configError (exit 2)")
+	}
+}
+
+// @test:TestLoadConfigRefusesAPositiveMaxUsdPerDayOnAnUnpricedOpenAIBackend
+func TestLoadConfigRefusesAPositiveMaxUsdPerDayOnAnUnpricedOpenAIBackend(t *testing.T) {
+	clearTyprxEnv(t)
+	env := openAIWorkingEnv(t, "") // no prices configured: unpriced
+	env["TYPRYX_MAX_USD_PER_DAY"] = "5"
+	setEnv(t, env)
+	_, err := loadConfig()
+	if err == nil || !strings.Contains(err.Error(), "TYPRYX_MAX_USD_PER_DAY") {
+		t.Fatalf("expected an error naming TYPRYX_MAX_USD_PER_DAY, got %v", err)
+	}
+}
+
+func TestLoadConfigAcceptsAPositiveMaxUsdPerDayOnAPricedJevBackend(t *testing.T) {
+	clearTyprxEnv(t)
+	env := jevWorkingEnv(t, "")
+	env["TYPRYX_JEV_PRICE_PER_MTOK_OUTPUT"] = "0.5"
+	env["TYPRYX_MAX_USD_PER_DAY"] = "5"
+	setEnv(t, env)
+	cfg, err := loadConfig()
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if cfg.maxUsdPerDay == nil || *cfg.maxUsdPerDay != 5 {
+		t.Fatalf("expected maxUsdPerDay 5, got %v", cfg.maxUsdPerDay)
+	}
+}
+
+func TestLoadConfigRefusesAPositiveMaxUsdPerDayOnAnUnpricedJevBackend(t *testing.T) {
+	clearTyprxEnv(t)
+	env := jevWorkingEnv(t, "") // no prices configured: unpriced
+	env["TYPRYX_MAX_USD_PER_DAY"] = "5"
+	setEnv(t, env)
+	_, err := loadConfig()
+	if err == nil || !strings.Contains(err.Error(), "TYPRYX_MAX_USD_PER_DAY") {
+		t.Fatalf("expected an error naming TYPRYX_MAX_USD_PER_DAY, got %v", err)
+	}
+}
+
+func TestBuildRuntimeWiresTheUsdCapWhenPositive(t *testing.T) {
+	clearTyprxEnv(t)
+	env := openAIWorkingEnv(t, "")
+	env["TYPRYX_OPENAI_PRICE_PER_MTOK_INPUT"] = "0.03"
+	env["TYPRYX_MAX_USD_PER_DAY"] = "5"
+	setEnv(t, env)
+	cfg, err := loadConfig()
+	if err != nil {
+		t.Fatalf("loadConfig: %v", err)
+	}
+	rt, err := buildRuntime(cfg, testLogger())
+	if err != nil {
+		t.Fatalf("buildRuntime: %v", err)
+	}
+	defer rt.journal.Close()
+	if rt.server == nil {
+		t.Fatal("expected a server")
+	}
+}
+
+func TestBuildRuntimeWarnsOnAnExplicitlyDisabledUsdCap(t *testing.T) {
+	clearTyprxEnv(t)
+	env := map[string]string{"TYPRYX_BACKEND": "stub", "TYPRYX_TEMPLATES": validTemplatesDirForTest(t)}
+	env["TYPRYX_MAX_USD_PER_DAY"] = "0"
+	setEnv(t, env)
+	cfg, err := loadConfig()
+	if err != nil {
+		t.Fatalf("loadConfig: %v", err)
+	}
+	rt, err := buildRuntime(cfg, testLogger())
+	if err != nil {
+		t.Fatalf("buildRuntime: %v", err)
+	}
+	defer rt.journal.Close()
+}
+
+func TestEnvFloatPtrDistinguishesUnsetFromMalformed(t *testing.T) {
+	clearTyprxEnv(t)
+	if v, err := envFloatPtr("TYPRYX_DOES_NOT_EXIST_TEST_VAR"); err != nil || v != nil {
+		t.Fatalf("expected nil, nil for an unset variable, got %v, %v", v, err)
+	}
+	setEnv(t, map[string]string{"TYPRYX_DOES_NOT_EXIST_TEST_VAR": "3.5"})
+	v, err := envFloatPtr("TYPRYX_DOES_NOT_EXIST_TEST_VAR")
+	if err != nil || v == nil || *v != 3.5 {
+		t.Fatalf("expected 3.5, nil, got %v, %v", v, err)
+	}
+	setEnv(t, map[string]string{"TYPRYX_DOES_NOT_EXIST_TEST_VAR": "not-a-number"})
+	if _, err := envFloatPtr("TYPRYX_DOES_NOT_EXIST_TEST_VAR"); err == nil {
+		t.Fatal("expected an error for a malformed value")
+	}
+}
+
+func TestUsdCapState(t *testing.T) {
+	five := 5.0
+	zero := 0.0
+	neg := -1.0
+	cases := []struct {
+		v    *float64
+		want string
+	}{
+		{nil, "UNSET"},
+		{&zero, "DISABLED"},
+		{&neg, "DISABLED"},
+		{&five, "5"},
+	}
+	for _, c := range cases {
+		if got := usdCapState(c.v); got != c.want {
+			t.Errorf("usdCapState(%v) = %q, want %q", c.v, got, c.want)
+		}
+	}
+}
+
 // --- jev backend configuration -----------------------------------------------
 
 func jevWorkingEnv(t *testing.T, keyFile string) map[string]string {

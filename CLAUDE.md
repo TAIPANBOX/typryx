@@ -338,6 +338,81 @@ in the plan.
     test: `TestEveryStarterTemplateLoads`, `TestNoStarterTemplateNamesAnIdentifyingField`,
     both in `internal/template`)*
 
+29. **A hosted endpoint never sees typryx's own identifiers unless the
+    operator switched that on by name.** `TYPRYX_OPENAI_METER_HEADERS`
+    defaults to off, and off, `openai-logprobs` sends neither `x-fuse-run-id`
+    nor `x-fuse-agent-id` to any endpoint, whatever a caller's ask carried.
+    On, the two headers carry the ask's own run id (or, when the caller gave
+    none, `TYPRYX_OPENAI_RUN_ID`) and the agent the caller's credential
+    resolved to; a run id is validated at the API and MCP boundary before it
+    ever reaches a service call or an outbound header (at most 128 bytes, no
+    control character, which also rules out a header-splitting CRLF), so
+    `bad_run_id` is refused before anything downstream ever sees the value.
+    This is what lets an operator who points `TYPRYX_OPENAI_URL` at a
+    metering gateway such as tokenfuse's own OpenAI-wire gateway make
+    typryx's own spend visible on that gateway's side of the door, entirely
+    by configuration: tokenfuse itself is not changed for this (see the
+    `@decided` note below). *(test: `TestMeteringHeadersAreNeverSentWhenTheFlagIsOff`,
+    `TestMeteringHeadersCarryTheCallersRunIDAndAgentIDWhenOn`,
+    `TestMeteringHeadersFallBackToTheConfiguredRunIDWhenTheCallerGaveNone`,
+    `TestMeteringHeadersSendNeitherWhenOnButNothingIsSet`, all in
+    `internal/backend`; `TestValidRunID` in `internal/door`;
+    `TestAskRejectsABadRunID`, `TestAskAcceptsAWellFormedRunID` in
+    `internal/api`; `TestAskToolRejectsABadRunID`,
+    `TestAskFreeformToolRejectsABadRunID` in `internal/mcp`;
+    `TestJevNeverForwardsRunIDOrAgentID` in `internal/backend`, since the jev
+    backend reads neither field at all; mutant: the `MeterHeaders` check
+    removed so headers are always sent, caught by
+    `TestMeteringHeadersAreNeverSentWhenTheFlagIsOff`)*
+
+30. **The openai-logprobs backend's cost is computed only from the configured
+    price, never hardcoded.** `TYPRYX_OPENAI_PRICE_PER_MTOK_INPUT`/`_OUTPUT`
+    are the only source of a non-zero `cost_usd` for this backend, the same
+    shape invariant 27 already holds for jev; unset, both default to 0 and
+    every answer reports `cost_usd: 0` regardless of how many tokens were
+    used. *(test: `TestOpenAICostIsInputTokensTimesTheConfiguredPriceNeverSwapped`,
+    `TestOpenAICostIsZeroWhenNoPriceIsConfigured`, both in `internal/backend`;
+    mutant: the input and output prices swapped in the cost formula, caught
+    by `TestOpenAICostIsInputTokensTimesTheConfiguredPriceNeverSwapped`)*
+
+31. **An optional daily USD spend cap is checked before the call, never
+    measures a backend that cannot report cost, and is lost on restart, the
+    same as the hourly cap.** `TYPRYX_MAX_USD_PER_DAY` unset means no daily
+    cap at all; `0` is the explicit disabled state, logging a boot warning
+    like the hourly cap's own `0`; a positive value is a fixed UTC-calendar-day
+    window, checked (`>=`, so the call that would reach the limit is the one
+    refused) before the backend is asked and refused as `over_daily_spend_cap`
+    (429), recorded exactly like `over_hourly_cap`. Spend is added after any
+    call that reported usage, whether it went on to answer, come back
+    unanswered, or fail outright, since tokens a paid backend already spent
+    cost money regardless of what the response validated as; an unpriced
+    backend's cost is always 0, so it never moves the total. Startup refuses
+    (exit 2) when a positive cap is configured over a backend that would
+    report `cost_usd` 0 for every call regardless (`stub`, or
+    `openai-logprobs`/`jev` with both configured prices at 0): a cap on a
+    backend that reports no cost measures nothing, and starting anyway would
+    let an operator believe an unpriced deployment is bounded when it is not.
+    The one bound this cap does not close: a call already in flight when the
+    cap is reached is not stopped mid-call, so the day's actual spend can
+    overshoot the configured limit by up to one call's worth; README names
+    this beside the daily cap's own documentation. *(test:
+    `TestTheDailyUsdCapRefusesTheCallAfterTheLimitIsReached`,
+    `TestTheDailyUsdCapIsNeverConsumedByARefusedCall`,
+    `TestNoDailyUsdCapNeverRefuses`,
+    `TestUsdCapWindowRollsOverAtTheNextUTCDayWithAnInjectedClock`,
+    `TestUsdCapAtZeroOrLessNeverRefusesOrAdds`, all in `internal/service`;
+    `TestLoadConfigRefusesAPositiveMaxUsdPerDayOnTheStubBackend`,
+    `TestLoadConfigRefusesAPositiveMaxUsdPerDayOnAnUnpricedOpenAIBackend`,
+    `TestLoadConfigRefusesAPositiveMaxUsdPerDayOnAnUnpricedJevBackend`,
+    `TestLoadConfigAcceptsMaxUsdPerDayZeroAsExplicitlyDisabled`, all in
+    `cmd/typryx`; mutants: the `>=` check turned `>`, spend never added, and
+    the day window never rolling forward, each caught by the tests named
+    above (the first two by `TestTheDailyUsdCapRefusesTheCallAfterTheLimitIsReached`,
+    the third by `TestUsdCapWindowRollsOverAtTheNextUTCDayWithAnInjectedClock`);
+    the unpriced-backend start check removed, caught by
+    `TestLoadConfigRefusesAPositiveMaxUsdPerDayOnTheStubBackend` and its
+    `openai-logprobs`/`jev` siblings)*
+
 34. **A backend server's refusal is told apart from its failure, by its
     machine code, never by its message.** A 4xx answer is logged as "server
     refused the call" and a 5xx as "server failed the call", with the status
@@ -363,6 +438,17 @@ only the fields a template names leave, to a named third-party processor
 under its own terms). Choosing a hosted backend is the customer's own
 explicit decision to send those named fields to that named processor, never
 a default. See README's "Where your data goes".
+
+@decided 2026-09-25: typryx's own spend through the `openai-logprobs` backend
+can be made visible to a tokenfuse gateway's budget, entirely by
+configuration and by headers tokenfuse already reads (`x-fuse-run-id`,
+`x-fuse-agent-id`); this HARD CONSTRAINT holds: tokenfuse itself is not
+changed for typryx, and nothing is added to tokenfuse's repository. Off by
+default (`TYPRYX_OPENAI_METER_HEADERS` unset); on, only when an operator both
+points `TYPRYX_OPENAI_URL` at the gateway and sets the flag by name, so a
+hosted provider that is not a gateway this operator chose never receives
+either header. See README's "Local model backend" for the second `typryx
+connect tokenfuse` block this adds.
 
 ### Not built yet
 

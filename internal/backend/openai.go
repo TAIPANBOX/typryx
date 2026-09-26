@@ -52,6 +52,30 @@ type OpenAIConfig struct {
 	// trusted; below it, the ask is unanswered with label_mass_too_low.
 	// <= 0 defaults to 0.9.
 	MinLabelMass float64
+	// MeterHeaders switches on two outbound headers a metering gateway such
+	// as tokenfuse's own OpenAI-wire gateway already reads:
+	// x-fuse-run-id and x-fuse-agent-id. Off by default and, when off,
+	// NEITHER header is ever sent: a hosted provider that is not a gateway
+	// this operator chose to point at must never receive typryx's own
+	// identifiers. On, x-fuse-run-id is the ask's own RunID when the caller
+	// gave one, else DefaultRunID when that is set, else the header is
+	// simply not sent; x-fuse-agent-id is the ask's AgentID when non-empty,
+	// else not sent. Neither header is ever sent with an empty value.
+	MeterHeaders bool
+	// DefaultRunID is the run id sent as x-fuse-run-id when MeterHeaders is
+	// on and a caller's ask carried none of its own (TYPRYX_OPENAI_RUN_ID).
+	// Validated the same way a caller-supplied run_id is (door.ValidRunID),
+	// by cmd/typryx before this config is ever built.
+	DefaultRunID string
+	// PriceInputPerMTok and PriceOutputPerMTok are USD per million tokens,
+	// used only to compute Usage.CostUSD. Zero (the default, and the zero
+	// value of this struct) means unpriced: cost_usd is always 0. Neither is
+	// ever hardcoded here; both come from cmd/typryx's own
+	// TYPRYX_OPENAI_PRICE_PER_MTOK_INPUT/OUTPUT, so a price change is
+	// configuration, never a code change, the same reasoning the jev
+	// backend's own prices already follow.
+	PriceInputPerMTok  float64
+	PriceOutputPerMTok float64
 	// Logger receives operational lines (a server error's status code, for
 	// instance) that must never reach the caller. Defaults to slog.Default().
 	Logger *slog.Logger
@@ -150,6 +174,14 @@ func (o *OpenAI) Ask(ctx context.Context, q Question, eg template.Egress) (Answe
 	if o.cfg.APIKey != "" {
 		httpReq.Header.Set("Authorization", "Bearer "+o.cfg.APIKey)
 	}
+	if o.cfg.MeterHeaders {
+		if runID := meterRunID(q.RunID, o.cfg.DefaultRunID); runID != "" {
+			httpReq.Header.Set("X-Fuse-Run-Id", runID)
+		}
+		if q.AgentID != "" {
+			httpReq.Header.Set("X-Fuse-Agent-Id", q.AgentID)
+		}
+	}
 
 	resp, err := o.client.Do(httpReq)
 	if err != nil {
@@ -198,12 +230,32 @@ func (o *OpenAI) Ask(ctx context.Context, q Question, eg template.Egress) (Answe
 	if model == "" {
 		model = o.cfg.Model
 	}
-	usage := Usage{CostUSD: 0}
+	usage := Usage{}
 	if parsed.Usage != nil {
 		usage.InputTokens = parsed.Usage.PromptTokens
 		usage.OutputTokens = parsed.Usage.CompletionTokens
+		usage.CostUSD = o.cost(usage.InputTokens, usage.OutputTokens)
 	}
 	return Answer{Probabilities: probs, Model: model}, usage, nil
+}
+
+// meterRunID picks the run id x-fuse-run-id carries when metering headers
+// are on: the ask's own run id first, the configured default second, and
+// "" (meaning: do not send the header at all) when neither is set.
+func meterRunID(askRunID, defaultRunID string) string {
+	if askRunID != "" {
+		return askRunID
+	}
+	return defaultRunID
+}
+
+// cost is InputTokens/1e6 * PriceInputPerMTok plus the same for output. Both
+// prices default to their zero value (unpriced), so an unconfigured
+// deployment always gets cost_usd 0, never a guessed number, the same
+// reasoning the jev backend's own cost method already follows.
+func (o *OpenAI) cost(inputTokens, outputTokens int) float64 {
+	return float64(inputTokens)/1e6*o.cfg.PriceInputPerMTok +
+		float64(outputTokens)/1e6*o.cfg.PriceOutputPerMTok
 }
 
 // labelsFor assigns single-letter labels, in order, to a question's options:

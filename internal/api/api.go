@@ -97,6 +97,11 @@ func (s *Server) handleAsk(w http.ResponseWriter, r *http.Request, agentID strin
 		writeError(w, http.StatusBadRequest, "bad_request", "could not parse the request body: "+err.Error())
 		return
 	}
+	if !door.ValidRunID(body.RunID) {
+		writeError(w, http.StatusBadRequest, "bad_run_id",
+			"run_id must be at most 128 bytes with no control characters")
+		return
+	}
 	req := service.AskRequest{Template: body.Template, State: body.State, RunID: body.RunID}
 	if body.Question != nil {
 		req.Question = &service.FreeformQuestion{

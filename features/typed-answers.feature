@@ -233,3 +233,43 @@ Feature: Typed answers, as an option a customer adds to the stack
     When typryx's jev backend gets that answer
     Then the operator's log says the server refused the call, with its status and its machine code
     And the message text reaches neither the log nor the caller
+
+  # @decided 2026-09-25: tokenfuse is not changed for typryx. typryx joins it
+  # by configuration and by headers tokenfuse already reads: an operator who
+  # points TYPRYX_OPENAI_URL at a tokenfuse gateway and opts in can make
+  # typryx's own spend visible on tokenfuse's side of the door, priced by a
+  # configured rate, and bounded by a daily cap.
+
+  # @test:TestMeteringHeadersAreNeverSentWhenTheFlagIsOff
+  Scenario: A hosted endpoint never sees typryx's identifiers by default
+    Given the openai-logprobs backend, pointed at any OpenAI-compatible endpoint
+    And no TYPRYX_OPENAI_METER_HEADERS is set
+    When a question is asked, with a run id and an agent identity both present
+    Then neither a run id nor an agent id is ever sent to the endpoint
+
+  # @test:TestMeteringHeadersCarryTheCallersRunIDAndAgentIDWhenOn
+  Scenario: An operator can make typryx's own spend visible to a metering gateway
+    Given the openai-logprobs backend, pointed at a metering gateway such as tokenfuse
+    And TYPRYX_OPENAI_METER_HEADERS is switched on
+    When a question is asked by an agent, carrying a run id
+    Then the gateway receives that run id and that agent's identity as headers it already reads
+    And the gateway's own budget can now see this call as typryx's spend
+
+  # @test:TestOpenAICostIsInputTokensTimesTheConfiguredPriceNeverSwapped
+  Scenario: A local model's spend is priced when a price is configured
+    Given the openai-logprobs backend with an input and an output price configured
+    When a question is answered and the response reports how many tokens it used
+    Then the answer's cost is the input tokens times the input price plus the output tokens times the output price
+
+  # @test:TestTheDailyUsdCapRefusesTheCallAfterTheLimitIsReached
+  Scenario: Spend can be capped per day
+    Given a daily USD spend cap, and today's spend already at that cap
+    When one more question is asked
+    Then it is refused as over the daily spend cap, before any backend is called
+
+  # @test:TestLoadConfigRefusesAPositiveMaxUsdPerDayOnTheStubBackend
+  Scenario: A daily cap over a backend that reports no cost measures nothing
+    Given a backend that always reports its cost as zero
+    And a daily USD spend cap is configured anyway
+    When the service starts
+    Then it refuses to start, naming the cap and the backend

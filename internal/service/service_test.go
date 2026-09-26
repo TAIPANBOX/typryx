@@ -1037,3 +1037,126 @@ func TestNoulCriteriaGivenReflectsWhetherTheTemplateSetAny(t *testing.T) {
 		}
 	})
 }
+
+// @test:TestTheCallersRunIDAndAgentIDReachTheBackendQuestion
+//
+// RunID and AgentID are identity metadata, never state: they must reach
+// backend.Question (a backend such as openai-logprobs reads them to decide
+// what, if anything, to forward as an outbound header) but must never touch
+// the template.Egress, the one and only state path (invariant 2).
+func TestTheCallersRunIDAndAgentIDReachTheBackendQuestion(t *testing.T) {
+	tb := &backendtest.Backend{Mode: backendtest.ModeOK, Answer: backend.Answer{
+		Yes: 0.5, Probabilities: map[string]float64{"true": 0.5, "false": 0.5}, Model: "test-0",
+	}}
+	d := newService(t, noulTemplate("task"), tb)
+	_, refusal := d.Service.Ask(context.Background(),
+		service.Caller{AgentID: "agent://acme.example/bot", RunID: "run-123"},
+		service.AskRequest{Template: "eval.outcome_met", RunID: "run-123", State: json.RawMessage(`{"task":"t"}`)})
+	if refusal != nil {
+		t.Fatalf("unexpected refusal: %+v", refusal)
+	}
+	if len(tb.Asked) != 1 {
+		t.Fatalf("expected 1 call, got %d", len(tb.Asked))
+	}
+	q := tb.Asked[0].Question
+	if q.RunID != "run-123" {
+		t.Errorf("expected RunID run-123 to reach the backend, got %q", q.RunID)
+	}
+	if q.AgentID != "agent://acme.example/bot" {
+		t.Errorf("expected AgentID to reach the backend, got %q", q.AgentID)
+	}
+}
+
+// @test:TestAnEmptyRunIDAndAgentIDReachTheBackendQuestionAsEmpty
+func TestAnEmptyRunIDAndAgentIDReachTheBackendQuestionAsEmpty(t *testing.T) {
+	tb := &backendtest.Backend{Mode: backendtest.ModeOK, Answer: backend.Answer{
+		Yes: 0.5, Probabilities: map[string]float64{"true": 0.5, "false": 0.5}, Model: "test-0",
+	}}
+	d := newService(t, noulTemplate("task"), tb)
+	_, refusal := d.Service.Ask(context.Background(),
+		service.Caller{}, // no agent, no run id: a credential with no bound identity
+		service.AskRequest{Template: "eval.outcome_met", State: json.RawMessage(`{"task":"t"}`)})
+	if refusal != nil {
+		t.Fatalf("unexpected refusal: %+v", refusal)
+	}
+	q := tb.Asked[0].Question
+	if q.RunID != "" || q.AgentID != "" {
+		t.Errorf("expected both empty, got RunID=%q AgentID=%q", q.RunID, q.AgentID)
+	}
+}
+
+// @test:TestTheDailyUsdCapRefusesTheCallAfterTheLimitIsReached
+func TestTheDailyUsdCapRefusesTheCallAfterTheLimitIsReached(t *testing.T) {
+	tb := &backendtest.Backend{Mode: backendtest.ModeOK, Answer: backend.Answer{
+		Yes: 0.5, Probabilities: map[string]float64{"true": 0.5, "false": 0.5}, Model: "test-0",
+	}, Usage: backend.Usage{CostUSD: 1.0}}
+	d := newService(t, noulTemplate("task"), tb)
+	d.Service.UsdCap = service.NewUsdCap(1.0)
+	req := service.AskRequest{Template: "eval.outcome_met", State: json.RawMessage(`{"task":"t"}`)}
+	caller := service.Caller{AgentID: "agent://acme.example/bot"}
+
+	// The first call spends exactly the cap (cost 1.0 against a 1.0 limit)
+	// and must still be answered: the cap is checked BEFORE the call, not
+	// after the call that reaches it.
+	result, refusal := d.Service.Ask(context.Background(), caller, req)
+	if refusal != nil {
+		t.Fatalf("the first call, which spends exactly the cap, must succeed: %+v", refusal)
+	}
+	if result.Unanswered {
+		t.Fatalf("expected an answer, got unanswered: %s", result.Reason)
+	}
+
+	// The second call must now be refused: spend (1.0) has reached the cap
+	// (>=, not >), and this call must never reach the backend.
+	_, refusal = d.Service.Ask(context.Background(), caller, req)
+	if refusal == nil {
+		t.Fatal("the second call, once the cap is reached, must be refused")
+	}
+	if refusal.Code != "over_daily_spend_cap" || refusal.HTTPStatus != 429 {
+		t.Errorf("expected over_daily_spend_cap/429, got %s/%d", refusal.Code, refusal.HTTPStatus)
+	}
+	if len(tb.Asked) != 1 {
+		t.Errorf("the refused call must never reach the backend; backend was asked %d times", len(tb.Asked))
+	}
+}
+
+// @test:TestTheDailyUsdCapIsNeverConsumedByARefusedCall
+func TestTheDailyUsdCapIsNeverConsumedByARefusedCall(t *testing.T) {
+	tb := &backendtest.Backend{Mode: backendtest.ModeOK, Answer: backend.Answer{
+		Yes: 0.5, Probabilities: map[string]float64{"true": 0.5, "false": 0.5}, Model: "test-0",
+	}, Usage: backend.Usage{CostUSD: 0.1}}
+	d := newService(t, noulTemplate("task"), tb)
+	d.Service.UsdCap = service.NewUsdCap(1.0)
+	caller := service.Caller{AgentID: "agent://acme.example/bot"}
+
+	for i := 0; i < 5; i++ {
+		_, refusal := d.Service.Ask(context.Background(), caller,
+			service.AskRequest{Template: "no-such-template", State: json.RawMessage(`{}`)})
+		if refusal == nil || refusal.Code != "unknown_template" {
+			t.Fatalf("call %d: expected unknown_template, got %+v", i, refusal)
+		}
+	}
+	// None of the refused calls above ever reached the backend, so none of
+	// them should have spent anything: a real answer must still fit.
+	_, refusal := d.Service.Ask(context.Background(), caller,
+		service.AskRequest{Template: "eval.outcome_met", State: json.RawMessage(`{"task":"t"}`)})
+	if refusal != nil {
+		t.Fatalf("the daily cap was consumed by calls that never reached it: %+v", refusal)
+	}
+}
+
+// @test:TestNoDailyUsdCapNeverRefuses
+func TestNoDailyUsdCapNeverRefuses(t *testing.T) {
+	tb := &backendtest.Backend{Mode: backendtest.ModeOK, Answer: backend.Answer{
+		Yes: 0.5, Probabilities: map[string]float64{"true": 0.5, "false": 0.5}, Model: "test-0",
+	}, Usage: backend.Usage{CostUSD: 1_000_000}} // an absurd cost; there is no cap to check it against
+	d := newService(t, noulTemplate("task"), tb)
+	// d.Service.UsdCap is left nil: this is the "unset" state.
+	req := service.AskRequest{Template: "eval.outcome_met", State: json.RawMessage(`{"task":"t"}`)}
+	caller := service.Caller{AgentID: "agent://acme.example/bot"}
+	for i := 0; i < 3; i++ {
+		if _, refusal := d.Service.Ask(context.Background(), caller, req); refusal != nil {
+			t.Fatalf("call %d: no UsdCap configured must never refuse, got %+v", i, refusal)
+		}
+	}
+}

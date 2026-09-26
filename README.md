@@ -13,7 +13,7 @@ and recorded.
 ![Go 1.27](https://img.shields.io/badge/Go-1.27-4493f8)
 ![one direct dependency](https://img.shields.io/badge/direct%20dependency-one-2dd4bf)
 ![license Apache 2.0](https://img.shields.io/badge/license-Apache--2.0-9aa7b8)
-![tests](https://img.shields.io/badge/tests-815-brightgreen)
+![tests](https://img.shields.io/badge/tests-865-brightgreen)
 
 </div>
 
@@ -277,6 +277,46 @@ answer that does not achieve the task), taken verbatim from this run, prompts un
 from what this section already describes. The `eval.answer_quality` and
 `request.complexity` rows above look sound on this small, informal sample, but six asks
 prove nothing about calibration; see NOT PROVEN.
+
+### Spend through a metering gateway, priced, and capped per day
+
+`TYPRYX_OPENAI_URL` can point at any OpenAI-compatible endpoint, including a metering
+gateway such as tokenfuse's own OpenAI-wire gateway sitting in front of a provider.
+tokenfuse is not changed for this: typryx joins it entirely by configuration and by two
+headers tokenfuse already reads, `x-fuse-run-id` and `x-fuse-agent-id`.
+
+- **Off by default.** `TYPRYX_OPENAI_METER_HEADERS` is unset unless an operator sets it
+  by name; off, this backend sends neither header to any endpoint, whatever a caller's
+  ask carried. A hosted provider that is not a gateway this operator chose to point at
+  must never receive typryx's own identifiers.
+- **On, an ask's own identity travels with it.** `x-fuse-run-id` carries the ask's own
+  `run_id` when the caller gave one, else the configured `TYPRYX_OPENAI_RUN_ID`, else the
+  header is simply not sent; `x-fuse-agent-id` carries the agent the caller's typryx
+  credential resolved to, when there is one. A `run_id` is validated at the API/MCP
+  boundary before any of this (at most 128 bytes, no control character), so a malformed
+  one is refused with `400 bad_run_id` long before it could reach an outbound header.
+- **Priced.** `TYPRYX_OPENAI_PRICE_PER_MTOK_INPUT`/`_OUTPUT`, the same shape and default
+  (unset means `0`, unpriced) the jev backend's own prices already use. `cost_usd` is
+  computed from the response's own reported token usage times the configured price.
+- **Capped per day, optionally.** `TYPRYX_MAX_USD_PER_DAY` is a UTC-calendar-day,
+  in-process spend cap, counted only against calls that reached a backend (the same
+  point the hourly call cap counts from). Checked before the backend is asked; a call
+  that would bring the day's spend to, or past, the cap is refused as
+  `over_daily_spend_cap` (429). Lost on restart, like the hourly cap: there is no
+  persistence across a process restart, so a deployment restarted partway through a day
+  starts that day's spend count at zero again. **The one overshoot this cap does not
+  close**: a call already in flight when the cap is reached is not stopped mid-call, so
+  the day's actual spend can exceed the configured limit by up to one call's worth.
+  Setting a positive cap over a backend that always reports `cost_usd` 0 (`stub`, or
+  `openai-logprobs`/`jev` with no price configured) refuses to start (exit 2): a cap
+  that measures nothing is worse than no cap, because it looks like a real ceiling.
+
+```sh
+typryx connect tokenfuse
+```
+
+prints both directions: the existing MCP broker configuration, and, below it, the
+`TYPRYX_OPENAI_URL`/`TYPRYX_OPENAI_METER_HEADERS=1` block for this one.
 
 ## Jev backend
 
@@ -578,17 +618,27 @@ triage.anomaly_class 6b4497aec4a78b57c2b0e0b0481faa07e34eb0b7aa8297d45c6f12f4d12
 | `TYPRYX_OPENAI_MODEL` | when `TYPRYX_BACKEND=openai-logprobs` | none | the model name sent with every request |
 | `TYPRYX_OPENAI_KEY_FILE` | no | none = no `Authorization` header | path to a file holding a bearer key, trimmed; never read from the environment value itself, never logged, never echoed into an error |
 | `TYPRYX_OPENAI_MIN_LABEL_MASS` | no | `0.9` | fraction of the response's probability mass that must land on a lettered option; below it, the ask is unanswered with `label_mass_too_low` |
+| `TYPRYX_OPENAI_METER_HEADERS` | no | unset | only `1`/`true` count; on, each request carries `x-fuse-run-id` and `x-fuse-agent-id` when either is known (see [Local model backend](#local-model-backend)); off, neither header is ever sent, to any endpoint |
+| `TYPRYX_OPENAI_RUN_ID` | no | none | the run id sent as `x-fuse-run-id` when `TYPRYX_OPENAI_METER_HEADERS` is on and a caller's ask carried none of its own; at most 128 bytes, no control characters |
+| `TYPRYX_OPENAI_PRICE_PER_MTOK_INPUT` | no | `0` | USD per million input tokens for the openai-logprobs backend; `0` means unpriced, `cost_usd` is always `0` |
+| `TYPRYX_OPENAI_PRICE_PER_MTOK_OUTPUT` | no | `0` | USD per million output tokens for the openai-logprobs backend; `0` means unpriced |
 | `TYPRYX_JEV_KEY_FILE` | when `TYPRYX_BACKEND=jev` | none | path to a file holding the Jev bearer key, trimmed; never read from the environment value itself, never logged, never echoed into an error |
 | `TYPRYX_JEV_URL` | no | `https://api.typesafe.ai/v1` | must be absolute http/https with a host and no userinfo, query, or fragment |
 | `TYPRYX_JEV_MODEL` | no | `jev-latest` | the model name sent with every request |
 | `TYPRYX_JEV_PRICE_PER_MTOK_INPUT` | no | `0` | USD per million input tokens; `0` means unpriced, `cost_usd` is always `0` |
 | `TYPRYX_JEV_PRICE_PER_MTOK_OUTPUT` | no | `0` | USD per million output tokens; `0` means unpriced (matches the vendor's own launch pricing, output free) |
+| `TYPRYX_MAX_USD_PER_DAY` | no | unset = no daily cap | a UTC-calendar-day, in-process spend cap across every priced backend; `0` disables it explicitly, with a boot warning; refuses to start (exit 2) if the chosen backend is unpriced (see [What it will not do](#what-it-will-not-do)) |
 
 A missing required variable, or a required-when-chosen variable missing for the backend
 actually named, exits 2 and names the variable. A non-loopback bind with no
 `TYPRYX_KEYS` refuses to start (exit 1) unless `TYPRYX_ALLOW_OPEN_BIND=1`; required
 configuration is checked first, so that refusal always fires with the rest of the
 configuration already known sane.
+
+A caller-supplied `run_id`, on `/v1/ask` or either MCP `ask`/`ask_freeform` tool, is
+validated at that boundary before it reaches anything downstream: at most 128 bytes,
+no control character (which also rules out a header-splitting CR or LF), otherwise
+`400 bad_run_id`.
 
 `jev` (or any other paid backend)'s API key is read from a file path named by an
 environment variable, the same shape `TYPRYX_OPENAI_KEY_FILE` already uses, never
@@ -605,6 +655,11 @@ from the environment value itself and never logged; see [Jev backend](#jev-backe
 - **No answer without a probability.** A guess dressed as a number is worse than a
   refusal that says why.
 - **No key printed by anything in this repository**, including `typryx connect`.
+- **No hosted provider ever sees typryx's own run id or agent id unless an operator
+  named both the gateway and the flag.** `TYPRYX_OPENAI_METER_HEADERS` is off by
+  default; off, `x-fuse-run-id` and `x-fuse-agent-id` are never sent, to any endpoint.
+- **No spend cap that measures nothing.** `TYPRYX_MAX_USD_PER_DAY` set to a positive
+  number over a backend that always reports `cost_usd` 0 refuses to start.
 - **No claim about a vendor model's speed, cost, or accuracy.** Jev (TypeSafe AI) is
   a typed-decision model backend built and tested against a replayed wire shape, not
   yet run live; its published price and availability are vendor figures, quoted as
@@ -626,7 +681,7 @@ go build ./...
 ./scripts/gates-have-teeth.sh
 ```
 
-303 tests. `go test ./... -race` covers every package; `internal/manifest` builds and
+343 tests. `go test ./... -race` covers every package; `internal/manifest` builds and
 starts the real binary to prove `components.json` against what it actually does; CI's
 `image` job builds the Dockerfile on every push and pull request, pushing nowhere.
 
@@ -681,9 +736,21 @@ repository, and is now covered.
   is data, not instructions), which is a containment measure, not a claim of injection
   resistance: nothing here proves a sufficiently adversarial state cannot change what the
   model says about it.
-- **The openai-logprobs backend is unpriced.** `cost_usd` is always `0`, even against a
-  paid OpenAI-compatible endpoint, because this phase has no price configuration; a paid
-  endpoint's actual cost is not tracked.
+- **The openai-logprobs backend is unpriced unless a price is configured.**
+  `TYPRYX_OPENAI_PRICE_PER_MTOK_INPUT`/`_OUTPUT` default to `0`; a paid endpoint whose
+  operator never sets them still reports `cost_usd: 0` for every call, tracking nothing.
+- **The metering headers and the daily cap are proven by unit and process-level tests,
+  plus one live run, not by continuous measurement.** Measured 2026-09-25 on this Mac:
+  a real tokenfuse build (`TAIPANBOX/tokenfuse`, binary already built, not rebuilt for
+  this) on loopback in front of a local Ollama (`qwen2.5:7b`), and typryx's
+  `openai-logprobs` backend pointed at it. With `TYPRYX_OPENAI_METER_HEADERS` unset, an
+  ask came back `unanswered`/`backend_error` (tokenfuse's own log: `server error
+  status=400`, its metering_required refusal); with it set to `1` and a `run_id` on the
+  ask, the same ask answered normally, and `tokenfuse sql "SELECT * FROM calls"`
+  showed one row with `run_id=live-run-002` and
+  `agent_id=agent://demo.example/tester`, exactly what the ask carried. One run, one
+  model, one gateway build; not a claim about any other environment or about
+  tokenfuse's own behavior changing over time.
 - **The jev backend has never made a live call.** Built and tested only against an
   `httptest` fake replaying the documented wire shape; there is no key and no spend
   approval to call the real `api.typesafe.ai`. See [Jev backend](#jev-backend) and
