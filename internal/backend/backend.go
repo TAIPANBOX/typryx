@@ -11,6 +11,8 @@ package backend
 
 import (
 	"context"
+	"encoding/json"
+	"log/slog"
 
 	"github.com/TAIPANBOX/typryx/internal/template"
 )
@@ -97,4 +99,56 @@ type Usage struct {
 type Backend interface {
 	Name() string
 	Ask(ctx context.Context, q Question, egress template.Egress) (Answer, Usage, error)
+}
+
+// logHTTPFailure writes the one operator line for a 4xx or 5xx answer from a
+// backend server. It says whether the server refused the call (4xx: something
+// about the call, such as a tokenfuse gateway in front of the model asking for
+// `x-fuse-run-id` with `metering_required`) or failed it (5xx), and carries the
+// server's machine code when the body is JSON of the shape
+// {"error":{"type":"..."}} or {"error":{"code":"..."}}. Only a code made of
+// lowercase letters, digits and underscores, at most 64 bytes, is logged; the
+// message text never is, because it may echo anything that was sent.
+func logHTTPFailure(logger *slog.Logger, prefix string, status int, body []byte) {
+	msg := prefix + ": server failed the call"
+	if status < 500 {
+		msg = prefix + ": server refused the call"
+	}
+	if code := machineCode(body); code != "" {
+		logger.Warn(msg, "status", status, "error_type", code)
+		return
+	}
+	logger.Warn(msg, "status", status)
+}
+
+// machineCode returns error.type, else error.code, from a JSON error body when
+// it is a plain machine code, and "" otherwise.
+func machineCode(body []byte) string {
+	var parsed struct {
+		Error struct {
+			Type any `json:"type"`
+			Code any `json:"code"`
+		} `json:"error"`
+	}
+	if json.Unmarshal(body, &parsed) != nil {
+		return ""
+	}
+	for _, v := range []any{parsed.Error.Type, parsed.Error.Code} {
+		if s, ok := v.(string); ok && isMachineCode(s) {
+			return s
+		}
+	}
+	return ""
+}
+
+func isMachineCode(s string) bool {
+	if s == "" || len(s) > 64 {
+		return false
+	}
+	for _, r := range s {
+		if !(r >= 'a' && r <= 'z' || r >= '0' && r <= '9' || r == '_') {
+			return false
+		}
+	}
+	return true
 }

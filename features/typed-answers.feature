@@ -218,3 +218,18 @@ Feature: Typed answers, as an option a customer adds to the stack
     Given no TYPRYX_BACKEND is set
     When the service starts
     Then it refuses to start rather than picking a default, paid or not
+
+  # @test:TestARefusalIsLoggedWithItsMachineCodeNeverItsMessage
+  Scenario: An operator can tell why the model server said no
+    Given a model server, or a tokenfuse gateway in front of it, that refuses a call with a machine code such as metering_required
+    When typryx's backend gets that answer
+    Then the caller gets an unanswered backend_error as before
+    And the operator's log says the server refused the call, with its status and its machine code
+    And the text of the server's message reaches neither the log nor the caller
+
+  # @test:TestAJevRefusalIsLoggedWithItsMachineCodeNeverItsMessage
+  Scenario: The same holds when Jev says no
+    Given Jev refuses a call with a machine code and a message
+    When typryx's jev backend gets that answer
+    Then the operator's log says the server refused the call, with its status and its machine code
+    And the message text reaches neither the log nor the caller
