@@ -64,7 +64,7 @@ No claim here is about how fast, cheap, or accurate any vendor's model is; see
 With Go 1.27:
 
 ```sh
-go install github.com/TAIPANBOX/typryx/cmd/typryx@v0.1.0
+go install github.com/TAIPANBOX/typryx/cmd/typryx@v0.2.0
 ```
 
 Or from a clone, which also gives you the example templates:
@@ -81,11 +81,11 @@ digest with keyless cosign, build provenance attested; no `latest` tag, pin the 
 ```sh
 docker run --rm -p 4320:4320 \
   -e TYPRYX_BACKEND=stub -e TYPRYX_KEYS='k1=agent://demo.example/tester' \
-  ghcr.io/taipanbox/typryx:v0.1.0
+  ghcr.io/taipanbox/typryx:v0.2.0
 ```
 
-Measured 2026-09-25, pulled anonymously on a development Mac (Apple Silicon): the
-published `v0.1.0` image is **16.6 MB**, reports `version=v0.1.0`, answers `/healthz` and a
+Measured 2026-09-26, pulled anonymously on a development Mac (Apple Silicon): the
+published `v0.2.0` image is **16.6 MB**, reports `version=v0.2.0`, answers `/healthz` and a
 real `POST /v1/ask` (`held_back_fields: 1` for an extra `user_email`), and with
 `TYPRYX_BACKEND=stub` alone refuses to start with exit 1.
 
@@ -825,7 +825,9 @@ repository, and is now covered.
       [Jev backend](#jev-backend).
 - [x] **Phase F**: the four event types are registered in agent-passport's SPEC 6.2.
 - [x] **Phase G**: opt-in launcher wiring (stack-single, stack-up, stack-k8s) and a
-      fourth starter template with a catalog gate.
+      fourth starter template with a catalog gate. Since v0.2.0 all three launchers
+      put tokenfuse's MCP broker in front of typryx and its journal on the shared
+      event bus; an ask through the broker was measured answered in each.
 - [x] **Phase H**: verdryx's `typed` grader asks typryx and posts human labels back
       to `/v1/outcome`.
 - [ ] **Phase I**: a judge bake-off with a live Jev, prepared in verdryx's
