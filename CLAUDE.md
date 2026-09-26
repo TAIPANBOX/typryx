@@ -522,6 +522,21 @@ hosted provider that is not a gateway this operator chose never receives
 either header. See README's "Local model backend" for the second `typryx
 connect tokenfuse` block this adds.
 
+@decided 2026-09-26: three rules for every link between typryx and the rest of
+the stack, so that adding typryx can never add a new way for a core service to
+slow down or fail. (1) typryx is never on the path of an agent request: the
+money plane and the policy plane (tokenfuse, wardryx) name typryx in no file,
+code, configuration or docs; held across repositories by estate-gates C22. (2)
+The shared event bus is the default integration: typryx writes its four event
+types to the bus and a consumer reads them as ordinary events, which all three
+launchers do since 2026-09-26. (3) A direct call from a consumer to typryx is
+optional and off by default, with a short timeout, and the consumer behaves as
+if typryx were absent when it is slow, refusing or down; where typryx's answer
+IS the result a person asked for (verdryx's typed grader), a failure is
+reported as that run's failure and blocks nothing else. Each new link proves
+both halves in its own suite: unchanged behaviour without typryx, and typryx
+off, slow or failing does not break the consumer.
+
 ### Not built yet
 
 - **`jev`** (phase D) is built: `TYPRYX_BACKEND=jev` starts and makes real
