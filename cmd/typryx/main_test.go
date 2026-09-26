@@ -2,8 +2,11 @@ package main
 
 import (
 	"bytes"
+	"encoding/json"
 	"io"
 	"log/slog"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -1049,6 +1052,89 @@ func TestBuildRuntimeWithMinimalConfig(t *testing.T) {
 	}
 	if rt.ledger != nil {
 		t.Error("no TYPRYX_LEDGER_DIR was set; expected a nil ledger")
+	}
+}
+
+func TestLoadConfigDefaultsAcceptKeyInMetaToFalse(t *testing.T) {
+	clearTyprxEnv(t)
+	setEnv(t, map[string]string{"TYPRYX_BACKEND": "stub", "TYPRYX_TEMPLATES": validTemplatesDirForTest(t)})
+	cfg, err := loadConfig()
+	if err != nil {
+		t.Fatalf("loadConfig: %v", err)
+	}
+	if cfg.acceptKeyInMeta {
+		t.Error("expected acceptKeyInMeta to default to false")
+	}
+}
+
+func TestLoadConfigParsesAcceptKeyInMeta(t *testing.T) {
+	clearTyprxEnv(t)
+	setEnv(t, map[string]string{
+		"TYPRYX_BACKEND": "stub", "TYPRYX_TEMPLATES": validTemplatesDirForTest(t),
+		"TYPRYX_ACCEPT_KEY_IN_META": "1",
+	})
+	cfg, err := loadConfig()
+	if err != nil {
+		t.Fatalf("loadConfig: %v", err)
+	}
+	if !cfg.acceptKeyInMeta {
+		t.Error("expected acceptKeyInMeta to be true for TYPRYX_ACCEPT_KEY_IN_META=1")
+	}
+}
+
+// TestBuildRuntimeWiresAcceptKeyInMetaIntoTheAPIServer is the config-to-wire
+// proof: loadConfig parsing the flag is not the same claim as buildRuntime
+// actually handing it to the api.Server that answers real requests. It
+// drives the real *http.Server buildRuntime assembled (never calling
+// ListenAndServe; httptest.NewServer wraps its Handler directly), the same
+// pattern TestBuildRuntimeWithMinimalConfig already trusts for wiring
+// checks that need a real request/response round trip.
+func TestBuildRuntimeWiresAcceptKeyInMetaIntoTheAPIServer(t *testing.T) {
+	clearTyprxEnv(t)
+	setEnv(t, map[string]string{
+		"TYPRYX_BACKEND": "stub", "TYPRYX_TEMPLATES": validTemplatesDirForTest(t),
+		"TYPRYX_KEYS":               "k1=agent://demo.example/tester",
+		"TYPRYX_ACCEPT_KEY_IN_META": "1",
+	})
+	cfg, err := loadConfig()
+	if err != nil {
+		t.Fatalf("loadConfig: %v", err)
+	}
+	rt, err := buildRuntime(cfg, testLogger())
+	if err != nil {
+		t.Fatalf("buildRuntime: %v", err)
+	}
+	defer rt.journal.Close()
+
+	ts := httptest.NewServer(rt.server.Handler)
+	defer ts.Close()
+
+	// No X-Typryx-Key header at all: with the flag wired through, initialize
+	// still needs no credential.
+	resp, err := http.Post(ts.URL+"/mcp", "application/json",
+		bytes.NewReader([]byte(`{"jsonrpc":"2.0","id":1,"method":"initialize","params":{}}`)))
+	if err != nil {
+		t.Fatalf("request: %v", err)
+	}
+	defer resp.Body.Close()
+	var out map[string]any
+	json.NewDecoder(resp.Body).Decode(&out)
+	if result, ok := out["result"].(map[string]any); !ok || result["protocolVersion"] == nil {
+		t.Fatalf("expected a real initialize result with no credential at all, got %v", out)
+	}
+
+	// A tools/call with the credential only in params._meta must also work,
+	// proving the flag reached the server that actually answers requests,
+	// not only the config struct.
+	body := `{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"list_questions","arguments":{},"_meta":{"typryx/key":"k1"}}}`
+	resp2, err := http.Post(ts.URL+"/mcp", "application/json", bytes.NewReader([]byte(body)))
+	if err != nil {
+		t.Fatalf("request: %v", err)
+	}
+	defer resp2.Body.Close()
+	if resp2.StatusCode != http.StatusOK {
+		b, _ := io.ReadAll(resp2.Body)
+		t.Fatalf("expected 200, got %d: %s", resp2.StatusCode, b)
 	}
 }
 

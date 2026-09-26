@@ -3,6 +3,7 @@ package mcp_test
 import (
 	"bytes"
 	"encoding/json"
+	"fmt"
 	"io"
 	"math/rand"
 	"net/http"
@@ -15,6 +16,7 @@ import (
 	"github.com/TAIPANBOX/typryx/internal/api"
 	"github.com/TAIPANBOX/typryx/internal/backend"
 	"github.com/TAIPANBOX/typryx/internal/door"
+	"github.com/TAIPANBOX/typryx/internal/ledger"
 	"github.com/TAIPANBOX/typryx/internal/mcp"
 	"github.com/TAIPANBOX/typryx/internal/record"
 	"github.com/TAIPANBOX/typryx/internal/service"
@@ -51,6 +53,166 @@ func newTestStack(t *testing.T, allowFreeform bool) (*httptest.Server, door.Keys
 	ts := httptest.NewServer(api.NewMux(srv))
 	t.Cleanup(ts.Close)
 	return ts, keys
+}
+
+// metaStack is the full, real wiring (journal on disk, ledger on disk, the
+// real internal/mcp.Server, the real internal/api door) that the
+// TYPRYX_ACCEPT_KEY_IN_META tests below need: proving invariant 33 ("never
+// reaches the journal, the ledger, ... a response") needs the real journal
+// and ledger, not a fake, or the test would prove nothing about them.
+type metaStack struct {
+	ts          *httptest.Server
+	journalPath string
+	ledgerDir   string
+}
+
+func newMetaStack(t *testing.T, keys door.Keys, acceptKeyInMeta bool) metaStack {
+	t.Helper()
+	dir := t.TempDir()
+	tmplDir := filepath.Join(dir, "templates")
+	os.Mkdir(tmplDir, 0o755)
+	tmpl := template.Template{ID: "eval.outcome_met", Type: template.TypeNoul, Instructions: "is it true", Fields: []string{"task"}}
+	b, _ := json.Marshal(tmpl)
+	os.WriteFile(filepath.Join(tmplDir, "t.json"), b, 0o644)
+	reg, _, err := template.LoadDir(tmplDir)
+	if err != nil {
+		t.Fatalf("LoadDir: %v", err)
+	}
+	journalPath := filepath.Join(dir, "events.ndjson")
+	j, err := record.Open(journalPath)
+	if err != nil {
+		t.Fatalf("record.Open: %v", err)
+	}
+	t.Cleanup(func() { j.Close() })
+	ledgerDir := filepath.Join(dir, "ledger")
+	led, err := ledger.Open(ledgerDir)
+	if err != nil {
+		t.Fatalf("ledger.Open: %v", err)
+	}
+	t.Cleanup(func() { led.Close() })
+
+	svc := service.New()
+	svc.Templates = reg
+	svc.Backend = backend.Stub{}
+	svc.Cap = service.NewCap(1000)
+	svc.Journal = j
+	svc.Ledger = led
+
+	srv := &api.Server{Keys: keys, Service: svc, MCP: &mcp.Server{Service: svc}, AcceptKeyInMeta: acceptKeyInMeta}
+	ts := httptest.NewServer(api.NewMux(srv))
+	t.Cleanup(ts.Close)
+	return metaStack{ts: ts, journalPath: journalPath, ledgerDir: ledgerDir}
+}
+
+func postRawMCP(t *testing.T, ts *httptest.Server, headerKey, body string) *http.Response {
+	t.Helper()
+	req, err := http.NewRequest(http.MethodPost, ts.URL+"/mcp", bytes.NewReader([]byte(body)))
+	if err != nil {
+		t.Fatalf("building request: %v", err)
+	}
+	if headerKey != "" {
+		req.Header.Set(door.KeyHeader, headerKey)
+	}
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("request: %v", err)
+	}
+	return resp
+}
+
+// @test:TestAcceptKeyInMetaMetaKeyNeverReachesJournalLedgerOrResponse
+//
+// End-to-end, through the real service, journal and ledger: a marker
+// credential presented only in params._meta must answer the call (so the
+// credential really was used), name the right agent in the journal, and
+// still never appear, anywhere, in the HTTP response body, the journal
+// file, or the ledger files. There is no log line to check here: nothing in
+// this codebase logs a request body or a credential value at any point in
+// this path (checked by reading internal/api, internal/mcp and
+// internal/service whole), so that sink is vacuous by construction rather
+// than proven by an assertion with nothing to fail against.
+func TestAcceptKeyInMetaMetaKeyNeverReachesJournalLedgerOrResponse(t *testing.T) {
+	const marker = "th15-m3ta-cr3d3nt14l-must-nev3r-l1nger-anywh3r3"
+	keys := door.ParseKeys(marker + "=agent://acme.example/meta-bot")
+	st := newMetaStack(t, keys, true)
+
+	body := fmt.Sprintf(
+		`{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"ask","arguments":{"template":"eval.outcome_met","state":{"task":"t"}},"_meta":{"typryx/key":"%s"}}}`,
+		marker)
+	resp := postRawMCP(t, st.ts, "", body)
+	defer resp.Body.Close()
+	respBody, _ := io.ReadAll(resp.Body)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", resp.StatusCode, respBody)
+	}
+	if bytes.Contains(respBody, []byte(marker)) {
+		t.Errorf("the meta credential leaked into the HTTP response: %s", respBody)
+	}
+
+	var out map[string]any
+	if err := json.Unmarshal(respBody, &out); err != nil {
+		t.Fatalf("response did not parse: %v (%s)", err, respBody)
+	}
+	result := out["result"].(map[string]any)
+	if result["isError"] == true {
+		t.Fatalf("expected a successful answer, got %v", result)
+	}
+
+	journalBytes, err := os.ReadFile(st.journalPath)
+	if err != nil {
+		t.Fatalf("reading the journal: %v", err)
+	}
+	if !strings.Contains(string(journalBytes), "agent://acme.example/meta-bot") {
+		t.Errorf("expected the journal to name the agent the meta credential is bound to, got %s", journalBytes)
+	}
+	if bytes.Contains(journalBytes, []byte(marker)) {
+		t.Errorf("the meta credential leaked into the journal: %s", journalBytes)
+	}
+
+	ledgerFiles, _ := filepath.Glob(filepath.Join(st.ledgerDir, "*.ndjson"))
+	if len(ledgerFiles) == 0 {
+		t.Fatal("expected at least one ledger file, so this measured nothing")
+	}
+	for _, f := range ledgerFiles {
+		b, err := os.ReadFile(f)
+		if err != nil {
+			t.Fatalf("reading %s: %v", f, err)
+		}
+		if bytes.Contains(b, []byte(marker)) {
+			t.Errorf("the meta credential leaked into the ledger file %s: %s", f, b)
+		}
+	}
+}
+
+// @test:TestAcceptKeyInMetaEndToEndInitializeAndToolsListWithNoHeader
+//
+// The door-level unit tests in internal/api prove the decision; this proves
+// the real internal/mcp.Server actually answers a real initialize and a
+// real tools/list correctly when no credential was presented at all.
+func TestAcceptKeyInMetaEndToEndInitializeAndToolsListWithNoHeader(t *testing.T) {
+	st := newMetaStack(t, door.ParseKeys("k1=agent://acme.example/bot"), true)
+
+	resp := postRawMCP(t, st.ts, "", `{"jsonrpc":"2.0","id":1,"method":"initialize","params":{}}`)
+	defer resp.Body.Close()
+	var out map[string]any
+	json.NewDecoder(resp.Body).Decode(&out)
+	result, ok := out["result"].(map[string]any)
+	if !ok || result["protocolVersion"] != mcp.ProtocolVersion {
+		t.Fatalf("expected a real initialize result with no credential, got %v", out)
+	}
+
+	resp2 := postRawMCP(t, st.ts, "", `{"jsonrpc":"2.0","id":2,"method":"tools/list"}`)
+	defer resp2.Body.Close()
+	var out2 map[string]any
+	json.NewDecoder(resp2.Body).Decode(&out2)
+	result2, ok := out2["result"].(map[string]any)
+	if !ok {
+		t.Fatalf("expected a real tools/list result with no credential, got %v", out2)
+	}
+	tools, _ := result2["tools"].([]any)
+	if len(tools) == 0 {
+		t.Fatalf("expected a non-empty tool list, got %v", result2)
+	}
 }
 
 func rpcCall(t *testing.T, ts *httptest.Server, method, key string, params any) map[string]any {

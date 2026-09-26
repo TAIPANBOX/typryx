@@ -109,6 +109,7 @@ type config struct {
 	keys            door.Keys
 	allowOpenBind   bool
 	allowFreeform   bool
+	acceptKeyInMeta bool
 	backendName     string
 	templatesDir    string
 	templates       *template.Registry
@@ -438,6 +439,12 @@ func loadConfig() (*config, error) {
 	}
 	allowOpenBind := door.TruthyEnv(os.Getenv("TYPRYX_ALLOW_OPEN_BIND"))
 	allowFreeform := door.TruthyEnv(os.Getenv("TYPRYX_ALLOW_FREEFORM"))
+	// TYPRYX_ACCEPT_KEY_IN_META plays no part in the open-bind decision
+	// below, on purpose: it only lets a tools/call carry its credential in a
+	// different place, never lets a call through with none. A wide bind
+	// with no TYPRYX_KEYS configured refuses exactly as it always has,
+	// whatever this flag says (internal/manifest proves that row).
+	acceptKeyInMeta := door.TruthyEnv(os.Getenv("TYPRYX_ACCEPT_KEY_IN_META"))
 
 	if why := door.RefuseOpenBind(addr, keys, allowOpenBind); why != "" {
 		return nil, errors.New(why)
@@ -445,7 +452,8 @@ func loadConfig() (*config, error) {
 
 	return &config{
 		addr: addr, keys: keys, allowOpenBind: allowOpenBind, allowFreeform: allowFreeform,
-		backendName: backendName, templatesDir: templatesDir, templates: reg,
+		acceptKeyInMeta: acceptKeyInMeta,
+		backendName:     backendName, templatesDir: templatesDir, templates: reg,
 		maxCallsPerHour: maxCallsPerHour, timeoutMS: timeoutMS,
 		eventsPath: os.Getenv("TYPRYX_EVENTS"), ledgerDir: os.Getenv("TYPRYX_LEDGER_DIR"),
 		openai: openaiCfg, jev: jevCfg, maxUsdPerDay: maxUsdPerDay,
@@ -552,7 +560,7 @@ func buildRuntime(cfg *config, log *slog.Logger) (*runtime, error) {
 	svc.AllowFreeform = cfg.allowFreeform
 
 	mcpServer := &mcp.Server{Service: svc}
-	apiServer := &api.Server{Keys: cfg.keys, Service: svc, MCP: mcpServer}
+	apiServer := &api.Server{Keys: cfg.keys, Service: svc, MCP: mcpServer, AcceptKeyInMeta: cfg.acceptKeyInMeta}
 
 	srv := &http.Server{
 		Addr:              cfg.addr,
@@ -567,7 +575,8 @@ func buildRuntime(cfg *config, log *slog.Logger) (*runtime, error) {
 		"ledger", ledgerState(cfg.ledgerDir),
 		"calls_per_hour", capState(cfg.maxCallsPerHour),
 		"usd_per_day", usdCapState(cfg.maxUsdPerDay),
-		"freeform", cfg.allowFreeform)
+		"freeform", cfg.allowFreeform,
+		"accept_key_in_meta", cfg.acceptKeyInMeta)
 
 	return &runtime{server: srv, journal: journal, ledger: led}, nil
 }

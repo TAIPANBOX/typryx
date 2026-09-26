@@ -413,6 +413,78 @@ in the plan.
     `TestLoadConfigRefusesAPositiveMaxUsdPerDayOnTheStubBackend` and its
     `openai-logprobs`/`jev` siblings)*
 
+32. **A brokered `tools/call` may carry its credential in `params._meta`, only
+    when the operator opted in, and only for a call that needs one.**
+    `TYPRYX_ACCEPT_KEY_IN_META` (off by default, `door.TruthyEnv`) changes
+    `POST /mcp` alone. A `tools/call` with no `X-Typryx-Key` header may
+    resolve its identity from `params._meta["typryx/key"]` instead, through
+    the exact same `door.Keys` constant-time path a header goes through; a
+    header, when one is also present, is always the one used.
+    `initialize`, `tools/list`, and a JSON-RPC notification need no
+    credential at all either way, since none of them reach a backend or
+    name an agent; `ask`, `ask_freeform` and `list_questions` (every
+    `tools/call`) stay authenticated in every case, and a call with neither
+    a header nor a usable `_meta` credential is refused, never treated as
+    one more "needs nothing" case. With the flag off, `_meta` is never even
+    consulted: `initialize`/`tools/list` still need the header, exactly as
+    before this invariant existed. `/v1/ask`, `/v1/outcome` and
+    `/v1/templates` never accept a credential from the body, whatever this
+    flag says: it names one JSON-RPC field of one method on `/mcp`, nothing
+    on the `/v1/*` wire shape. The flag also never widens the open-bind
+    refusal (invariant 4): a non-loopback bind with no `TYPRYX_KEYS`
+    configured still refuses, since `door.RefuseOpenBind` never reads it.
+    *(test: `TestAcceptKeyInMetaOnAuthenticatesToolsCallFromMeta`,
+    `TestAcceptKeyInMetaInitializeAndToolsListNeedNoCredential`,
+    `TestAcceptKeyInMetaNotificationNeedsNoCredential`,
+    `TestAcceptKeyInMetaToolsCallWithNoKeyAtAllIsRefused`,
+    `TestAcceptKeyInMetaWrongMetaKeyIsRefused`,
+    `TestAcceptKeyInMetaHeaderWinsOverMetaAndMetaIsStripped`,
+    `TestAcceptKeyInMetaOffKeepsTodaysBehavior`,
+    `TestAcceptKeyInMetaDoesNotAffectV1Routes`,
+    `TestAcceptKeyInMetaOnlyChangesPOST`, all in `internal/api`;
+    `TestAcceptKeyInMetaEndToEndInitializeAndToolsListWithNoHeader` in
+    `internal/mcp`; `TestAcceptKeyInMetaDoesNotWidenTheOpenBindEscape` in
+    `internal/manifest`, against the real binary; mutants: a `tools/call`
+    with neither credential answered anyway, caught by
+    `TestAcceptKeyInMetaToolsCallWithNoKeyAtAllIsRefused`; header and
+    `_meta` precedence flipped, caught by
+    `TestAcceptKeyInMetaHeaderWinsOverMetaAndMetaIsStripped`; `_meta`
+    consulted with the flag off, caught by
+    `TestAcceptKeyInMetaOffKeepsTodaysBehavior`; `/v1/ask` reading a body
+    credential, caught by `TestAcceptKeyInMetaDoesNotAffectV1Routes`; the
+    open-bind escape widened by the flag, caught by
+    `TestAcceptKeyInMetaDoesNotWidenTheOpenBindEscape` (shown red first
+    against a deliberately widened `RefuseOpenBind` call))*
+
+33. **A `_meta` credential is removed from the request before anything
+    downstream ever sees it, used or not, and never reaches a log line, the
+    journal, the ledger, an error message, or a response.**
+    `mcp.ExtractMetaKey` strips only the one named entry (`typryx/key`),
+    never the whole `_meta` object, and `internal/api`'s door calls it
+    unconditionally, before deciding whether the request even needs a
+    credential and before deciding whether a header will be used instead: a
+    header-and-`_meta` call still has the `_meta` entry stripped even though
+    its value is never used. `internal/mcp.Server` itself needs no change to
+    hold this: its own `tools/call` parsing has never captured `_meta` at
+    all, so the entry is inert to it either way, and this invariant is what
+    keeps that true structurally rather than by omission. There is no log
+    line to check in this codebase today: nothing in the request path logs
+    a body or a credential value, checked by reading `internal/api`,
+    `internal/mcp` and `internal/service` whole, so that sink is proven
+    vacuous rather than merely unchecked. *(test:
+    `TestExtractMetaKeyStripsOnlyTheNamedEntry`,
+    `TestExtractMetaKeyDropsMetaEntirelyWhenItWasTheOnlyField`,
+    `TestExtractMetaKeyIsANoopWhenAbsentOrWrongMethodOrWrongType`,
+    `TestExtractMetaKeyNeverPanicsOnHostileBody` (200 seeds), all in
+    `internal/mcp`; `TestAcceptKeyInMetaMetaKeyNeverReachesTheMCPHandler` in
+    `internal/api`, the direct structural proof at the api/mcp seam;
+    `TestAcceptKeyInMetaMetaKeyNeverReachesJournalLedgerOrResponse` in
+    `internal/mcp`, end to end through the real service, journal and
+    ledger; mutant: the strip step skipped (the original, unstripped body
+    forwarded), caught by `TestAcceptKeyInMetaMetaKeyNeverReachesTheMCPHandler`,
+    which fails on the marker credential appearing in what the handler
+    received)*
+
 34. **A backend server's refusal is told apart from its failure, by its
     machine code, never by its message.** A 4xx answer is logged as "server
     refused the call" and a 5xx as "server failed the call", with the status

@@ -273,3 +273,43 @@ Feature: Typed answers, as an option a customer adds to the stack
     And a daily USD spend cap is configured anyway
     When the service starts
     Then it refuses to start, naming the cap and the backend
+
+  # @decided 2026-09-25: typryx joins tokenfuse's MCP broker by
+  # configuration alone; tokenfuse itself is not changed. The broker
+  # forwards a brokered call with only a content-type header, but on
+  # tools/call it resolves a handle anywhere inside params, including
+  # inside _meta, from its own vault first.
+
+  # @test:TestAcceptKeyInMetaOnAuthenticatesToolsCallFromMeta
+  Scenario: typryx behind a credential-blind broker still knows who is asking
+    Given TYPRYX_ACCEPT_KEY_IN_META is switched on
+    And a tools/call carries no X-Typryx-Key header
+    When its params carry the credential under _meta instead
+    Then the call is answered under the agent that credential is bound to
+
+  # @test:TestAcceptKeyInMetaInitializeAndToolsListNeedNoCredential
+  Scenario: With the flag on, listing what can be asked needs no credential
+    Given TYPRYX_ACCEPT_KEY_IN_META is switched on
+    When a client calls initialize or lists the tools, with no credential at all
+    Then it gets a real answer, since neither one reaches a backend or names an agent
+
+  # @test:TestAcceptKeyInMetaHeaderWinsOverMetaAndMetaIsStripped
+  Scenario: A header always wins over a credential carried in _meta
+    Given TYPRYX_ACCEPT_KEY_IN_META is switched on
+    And a tools/call carries both an X-Typryx-Key header and a _meta credential
+    When the call is answered
+    Then it is answered under the header's own agent, never the one in _meta
+
+  # @test:TestAcceptKeyInMetaMetaKeyNeverReachesTheMCPHandler
+  Scenario: A credential carried in _meta never lingers where it was asked
+    Given TYPRYX_ACCEPT_KEY_IN_META is switched on
+    When a tools/call's credential arrives under _meta
+    Then it is removed from the request before anything downstream sees it
+    And it never appears in the journal, the ledger, an error, or the response
+
+  # @test:TestAcceptKeyInMetaOffKeepsTodaysBehavior
+  Scenario: With the flag off, a credential in _meta is worth nothing
+    Given TYPRYX_ACCEPT_KEY_IN_META is not set
+    And a tools/call carries a valid credential only under _meta
+    When the call arrives with no X-Typryx-Key header
+    Then it is refused exactly as it always was

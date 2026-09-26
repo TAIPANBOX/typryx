@@ -366,6 +366,41 @@ func TestAWideBindWithNoCredentialRefusesToStart(t *testing.T) {
 	}
 }
 
+// TestAcceptKeyInMetaDoesNotWidenTheOpenBindEscape: TYPRYX_ACCEPT_KEY_IN_META
+// changes where a tools/call may carry its credential FROM, never whether a
+// credential is required to bind wide at all. A non-loopback bind with no
+// TYPRYX_KEYS configured must still refuse (exit 1) with the flag set,
+// exactly as the matrix above already proves it does without it; the flag
+// itself carries no escape hatch of its own for RefuseOpenBind, on purpose,
+// since the door.Keys check that matrix runs never even looks at it.
+func TestAcceptKeyInMetaDoesNotWidenTheOpenBindEscape(t *testing.T) {
+	if testing.Short() {
+		t.Skip("starts processes")
+	}
+	m, r := load(t)
+	c := service(t, m)
+	ob := c.Checked.RefusesAnOpenBind
+	if ob.ExitCode == 0 {
+		t.Fatal("components.json does not record the open-bind exit code, so this measured nothing")
+	}
+	bin := build(t, r, c.Checked.Package)
+	templatesDir := validTemplatesDir(t)
+	env := []string{
+		"TYPRYX_BACKEND=stub", "TYPRYX_TEMPLATES=" + templatesDir,
+		"TYPRYX_ADDR=0.0.0.0:" + freePort(t),
+		"TYPRYX_ACCEPT_KEY_IN_META=1",
+	}
+	up, code, out := startAndSee(t, bin, env)
+	if up {
+		t.Fatal("TYPRYX_ACCEPT_KEY_IN_META=1 with no TYPRYX_KEYS and a non-loopback bind started; " +
+			"that is an unauthenticated typed-answer service on whatever network this box is on, " +
+			"and the open-bind matrix must refuse it exactly as it does without the flag")
+	}
+	if code != ob.ExitCode {
+		t.Errorf("expected exit %d, got %d\n%s", ob.ExitCode, code, out)
+	}
+}
+
 func TestItRefusesWithoutEachRequiredVariable(t *testing.T) {
 	if testing.Short() {
 		t.Skip("starts processes")
