@@ -64,7 +64,7 @@ No claim here is about how fast, cheap, or accurate any vendor's model is; see
 With Go 1.27:
 
 ```sh
-go install github.com/TAIPANBOX/typryx/cmd/typryx@v0.2.0
+go install github.com/TAIPANBOX/typryx/cmd/typryx@v0.3.0
 ```
 
 Or from a clone, which also gives you the example templates:
@@ -81,13 +81,18 @@ digest with keyless cosign, build provenance attested; no `latest` tag, pin the 
 ```sh
 docker run --rm -p 4320:4320 \
   -e TYPRYX_BACKEND=stub -e TYPRYX_KEYS='k1=agent://demo.example/tester' \
-  ghcr.io/taipanbox/typryx:v0.2.0
+  ghcr.io/taipanbox/typryx:v0.3.0
 ```
 
-Measured 2026-09-26, pulled anonymously on a development Mac (Apple Silicon): the
-published `v0.2.0` image is **16.6 MB**, reports `version=v0.2.0`, answers `/healthz` and a
-real `POST /v1/ask` (`held_back_fields: 1` for an extra `user_email`), and with
-`TYPRYX_BACKEND=stub` alone refuses to start with exit 1.
+Measured 2026-09-30, pulled on a development Mac (Apple Silicon): the published `v0.3.0`
+image is **16.6 MB** and reports `version=v0.3.0`. With the stub backend,
+`TYPRYX_LEDGER_DIR` and `TYPRYX_TRAINING_DIR` set, it logged `training_log=<dir>` at boot,
+answered an ask that carried an extra `customer_email`, recorded a truth posted to
+`/v1/outcome`, and `typryx export --training` inside the container wrote one row whose
+`state` held only the template's two fields and whose `label` was the posted truth; the
+training directory was `0700`, the file `0600`, and no line contained the email. The
+`v0.2.0` image (2026-09-26) was the same size and, with `TYPRYX_BACKEND=stub` alone,
+refused to start with exit 1.
 
 To build it yourself instead: `docker build -t typryx:dev .`
 
