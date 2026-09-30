@@ -552,9 +552,16 @@ func questionFor(t template.Template) (backend.Question, []string, error) {
 // validateProbabilities is the service's own check of what a backend
 // answered: never trusted, always verified. Missing or empty is
 // "no_probabilities"; present but not covering every expected key, out of
-// [0,1], NaN/Inf, or not summing to 1 within 1e-6 is "bad_probabilities".
-// There is no renormalizing path: a backend that cannot produce a valid
-// distribution gets refused, not corrected.
+// [0,1], NaN/Inf, or not summing to 1 within probSumTolerance is
+// "bad_probabilities". There is no renormalizing path: a backend that cannot
+// produce a valid distribution gets refused, not corrected, and one inside
+// the tolerance is served exactly as returned.
+//
+// probSumTolerance is 1e-3, the same window the openai-logprobs backend
+// allows for Ollama's rounding (label mass up to 1.001): typed-decision
+// servers round each probability to four decimals (Von and Laya, measured
+// 2026-09-30), so a real distribution sums to 0.9999 or 1.0001, which the
+// earlier 1e-6 refused outright.
 func validateProbabilities(probs map[string]float64, keys []string) (string, bool) {
 	if len(probs) == 0 {
 		return "no_probabilities", false
@@ -576,11 +583,13 @@ func validateProbabilities(probs map[string]float64, keys []string) (string, boo
 		}
 		sum += v
 	}
-	if math.Abs(sum-1) > 1e-6 {
+	if math.Abs(sum-1) > probSumTolerance {
 		return "bad_probabilities", false
 	}
 	return "", true
 }
+
+const probSumTolerance = 1e-3
 
 // Outcome records a later truth against the answer it belongs to, scored
 // against exactly the template version, backend and model recorded when the

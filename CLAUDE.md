@@ -73,6 +73,11 @@ in the plan.
    malformed probabilities, a cap hit: the result is `unanswered` with a
    reason, and the wire shape omits `answer` and `probabilities` entirely
    rather than sending a null or a zero. No renormalizing, no fallback guess.
+   A distribution counts as summing to one within 1e-3 (`probSumTolerance`),
+   the rounding typed-decision servers apply (Von and Laya round to four
+   decimals, measured 2026-09-30), and is then served exactly as returned.
+   *(test: `TestADistributionRoundedToFourDecimalsIsAnsweredAsReturned`;
+   mutants 1e-6 and 1e-2 each caught)*
    Reasons: `backend_error`, `timeout`, `canceled`, `no_probabilities`,
    `bad_probabilities`, `over_hourly_cap`, and, from the openai-logprobs
    backend's own `backend.UnansweredError` (phase C), `no_logprobs`,

@@ -13,7 +13,7 @@ and recorded.
 ![Go 1.27](https://img.shields.io/badge/Go-1.27-4493f8)
 ![one direct dependency](https://img.shields.io/badge/direct%20dependency-one-2dd4bf)
 ![license Apache 2.0](https://img.shields.io/badge/license-Apache--2.0-9aa7b8)
-![tests](https://img.shields.io/badge/tests-897-brightgreen)
+![tests](https://img.shields.io/badge/tests-898-brightgreen)
 
 </div>
 
@@ -258,7 +258,8 @@ distribution win, every time. `stub` is deterministic and free, and every answer
 gives says `backend: stub` so nothing downstream mistakes it for a judgement.
 
 A backend error, a timeout, a canceled request, missing probabilities, or a probability
-set that does not validate (wrong keys, out of range, not summing to one) all produce
+set that does not validate (wrong keys, out of range, not summing to one within 0.001,
+the rounding typed-decision servers apply to four decimals) all produce
 `unanswered` with a `reason` (`backend_error`, `timeout`, `canceled`,
 `no_probabilities`, `bad_probabilities`, the openai-logprobs backend's own
 `no_logprobs`, `label_mass_too_low`, `too_many_options`, `bad_logprobs`, and the
@@ -727,7 +728,7 @@ go build ./...
 ./scripts/gates-have-teeth.sh
 ```
 
-368 tests. `go test ./... -race` covers every package; `internal/manifest` builds and
+369 tests. `go test ./... -race` covers every package; `internal/manifest` builds and
 starts the real binary to prove `components.json` against what it actually does; CI's
 `image` job builds the Dockerfile on every push and pull request, pushing nowhere.
 

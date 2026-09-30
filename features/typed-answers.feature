@@ -145,6 +145,13 @@ Feature: Typed answers, as an option a customer adds to the stack
     Then the result is unanswered, with a reason
     And the little probability mass that did land on an option is never stretched to sum to one anyway
 
+  # @test:TestADistributionRoundedToFourDecimalsIsAnsweredAsReturned
+  Scenario: A server that rounds its probabilities is still answered, exactly as it sent them
+    Given a typed-decision server that rounds each probability to four decimals
+    When its probabilities for a question sum to 0.9999 or 1.0001
+    Then the question is answered with those probabilities exactly as returned
+    And a set that sums further than 0.001 from one is still unanswered, with a reason
+
   # @test:TestAnOperatorCanSeeWhetherAModelsProbabilitiesCanBeTrusted
   Scenario: An operator can see whether a model's probabilities can be trusted
     Given a template, backend and model with enough recorded outcomes
