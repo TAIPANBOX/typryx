@@ -75,6 +75,13 @@ func Open(dir string) (*Log, error) {
 	if err != nil {
 		return nil, fmt.Errorf("traininglog: opening %s: %w", path, err)
 	}
+	// O_CREATE's 0600 applies only to a NEW file. One that already exists
+	// with wider permissions (copied in, restored from a backup) is narrowed
+	// here rather than trusted as found.
+	if err := f.Chmod(0o600); err != nil {
+		_ = f.Close()
+		return nil, fmt.Errorf("traininglog: narrowing %s to 0600: %w", path, err)
+	}
 	return &Log{file: f, tornBytes: torn}, nil
 }
 

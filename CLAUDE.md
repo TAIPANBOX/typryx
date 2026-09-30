@@ -517,6 +517,7 @@ in the plan.
     `TestTheTrainingLogIsOffUnlessADirectoryIsNamed` in `cmd/typryx`,
     `TestTheTrainingLogIsOffByDefaultInTheRealBinary` in `internal/manifest`
     against the built binary, `TestTheTrainingDirIsPrivateAndTheFileIsPrivate`,
+    `TestAnExistingTrainingFileIsNarrowedToPrivate` (an existing file is narrowed to 0600 at open),
     `TestATornTrainingTailIsTruncatedBeforeTheNextWrite` in
     `internal/traininglog`, `TestATrainingLogWriteFailureNeverTurnsAnAnswerIntoARefusal`
     in `internal/service`; mutants: default directory set when unset, dir

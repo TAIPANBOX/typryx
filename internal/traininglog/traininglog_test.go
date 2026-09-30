@@ -66,6 +66,37 @@ func TestTheTrainingDirIsPrivateAndTheFileIsPrivate(t *testing.T) {
 	}
 }
 
+// @test:TestAnExistingTrainingFileIsNarrowedToPrivate
+//
+// A training.ndjson that already exists with wider permissions (copied in,
+// restored from a backup, created by an older build) is narrowed to 0600 when
+// the log opens, not trusted as found: it holds a customer's own data.
+func TestAnExistingTrainingFileIsNarrowedToPrivate(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), "training")
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(dir, traininglog.FileName)
+	if err := os.WriteFile(path, nil, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(path, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	l, err := traininglog.Open(dir)
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	defer l.Close()
+	fi, err := os.Stat(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := fi.Mode().Perm(); got != 0o600 {
+		t.Errorf("an existing training.ndjson stayed %o after Open; it must be narrowed to 0600", got)
+	}
+}
+
 // @test:TestATrainingLineHasNoFieldThatCouldHoldABackendAnswer
 func TestATrainingLineHasNoFieldThatCouldHoldABackendAnswer(t *testing.T) {
 	var got []string

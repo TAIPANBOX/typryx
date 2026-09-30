@@ -381,6 +381,12 @@ Feature: Typed answers, as an option a customer adds to the stack
     When one is answered
     Then the training log gains no line, since there is no allowlist or template version to train against
 
+  # @test:TestAnExistingTrainingFileIsNarrowedToPrivate
+  Scenario: A training file that already exists with wider permissions is made private
+    Given a training file left readable by others, for example restored from a backup
+    When the log is opened
+    Then the file is readable and writable by its owner only
+
   # @test:TestTheTrainingDirIsPrivateAndTheFileIsPrivate
   Scenario: The training data is readable by its owner only
     Given a training directory that does not exist yet
