@@ -331,6 +331,52 @@ func TestBadProbabilitiesAreUnansweredNotGuessed(t *testing.T) {
 	}
 }
 
+// @test:TestADistributionRoundedToFourDecimalsIsAnsweredAsReturned
+//
+// Servers speaking the typed-decision wire (Von and Laya, measured
+// 2026-09-30 on a benchmark VM) round each probability to four decimals, so
+// a real distribution sums to 0.9999 or 1.0001. That is rounding, not a bad
+// distribution: it is answered, and the probabilities are served exactly as
+// returned, never stretched to sum to one. The window is the same 1e-3 the
+// openai-logprobs backend already allows for Ollama's rounding; a sum
+// further off than that is still refused.
+func TestADistributionRoundedToFourDecimalsIsAnsweredAsReturned(t *testing.T) {
+	ask := func(probs map[string]float64) service.Result {
+		t.Helper()
+		tb := &backendtest.Backend{Mode: backendtest.ModeOK, Answer: backend.Answer{Probabilities: probs, Model: "test-0"}}
+		d := newService(t, choiceTemplate(), tb)
+		result, refusal := d.Service.Ask(context.Background(),
+			service.Caller{AgentID: "agent://acme.example/bot"},
+			service.AskRequest{Template: "request.complexity", State: json.RawMessage(`{"prompt":"hi"}`)})
+		if refusal != nil {
+			t.Fatalf("unexpected refusal: %+v", refusal)
+		}
+		return result
+	}
+	for _, probs := range []map[string]float64{
+		{"cheap": 0.3333, "default": 0.3333, "hard": 0.3333}, // sums to 0.9999
+		{"cheap": 0.1868, "default": 0.6811, "hard": 0.1322}, // sums to 1.0001
+	} {
+		result := ask(probs)
+		if result.Unanswered {
+			t.Fatalf("a four-decimal rounding of a valid distribution was refused: %s (%v)", result.Reason, probs)
+		}
+		for k, v := range probs {
+			if result.Probabilities[k] != v {
+				t.Errorf("probability for %q served as %v, want exactly %v as returned (no renormalizing)", k, result.Probabilities[k], v)
+			}
+		}
+	}
+	for _, probs := range []map[string]float64{
+		{"cheap": 0.33, "default": 0.33, "hard": 0.338},      // sums to 0.998
+		{"cheap": 0.3337, "default": 0.3337, "hard": 0.3337}, // sums to 1.0011
+	} {
+		if result := ask(probs); !result.Unanswered || result.Reason != "bad_probabilities" {
+			t.Errorf("a sum more than 1e-3 from one must stay bad_probabilities, got unanswered=%v reason=%q (%v)", result.Unanswered, result.Reason, probs)
+		}
+	}
+}
+
 // @test:TestAProbabilityForAnOptionTheTemplateDoesNotHaveIsRefused
 //
 // The expected key set (the template's option names, or "0".."n-1" for
