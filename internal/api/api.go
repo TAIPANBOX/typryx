@@ -81,7 +81,7 @@ func (s *Server) withDoor(next func(w http.ResponseWriter, r *http.Request, agen
 
 func (s *Server) handleHealthz(w http.ResponseWriter, r *http.Request) {
 	skipped, failed := s.Service.Journal.Counts()
-	writeJSON(w, http.StatusOK, map[string]any{
+	body := map[string]any{
 		"status": "ok",
 		"journal": map[string]any{
 			"skipped_no_agent": skipped,
@@ -90,7 +90,13 @@ func (s *Server) handleHealthz(w http.ResponseWriter, r *http.Request) {
 		"ledger": map[string]any{
 			"write_failed": s.Service.LedgerFailures(),
 		},
-	})
+	}
+	// Only when the opt-in training log is on: off means off, including in
+	// what this endpoint says about it.
+	if s.Service.Training != nil {
+		body["training"] = map[string]any{"write_failed": s.Service.TrainingFailures()}
+	}
+	writeJSON(w, http.StatusOK, body)
 }
 
 type askBody struct {

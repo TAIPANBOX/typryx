@@ -21,6 +21,7 @@ import (
 	"github.com/TAIPANBOX/typryx/internal/ledger"
 	"github.com/TAIPANBOX/typryx/internal/record"
 	"github.com/TAIPANBOX/typryx/internal/template"
+	"github.com/TAIPANBOX/typryx/internal/traininglog"
 )
 
 // Caller is who is asking, established by the door (a credential's bound
@@ -140,8 +141,9 @@ type Service struct {
 	Templates             *template.Registry
 	Backend               backend.Backend
 	Cap                   *Cap
-	UsdCap                *UsdCap        // nil: no daily USD spend cap
-	Ledger                *ledger.Ledger // nil: outcomes and answer ledgering are off
+	UsdCap                *UsdCap          // nil: no daily USD spend cap
+	Ledger                *ledger.Ledger   // nil: outcomes and answer ledgering are off
+	Training              *traininglog.Log // nil: the opt-in training log is off
 	Journal               *record.Journal
 	Timeout               time.Duration
 	AllowFreeform         bool
@@ -154,6 +156,10 @@ type Service struct {
 	// LedgerFailures (read from GET /healthz) run concurrently.
 	ledgerFailures atomic.Int64
 
+	// trainingFailures counts training-log write failures, for the same
+	// reason: a lost line is a fact an operator must be able to see.
+	trainingFailures atomic.Int64
+
 	// now and randomID are seams for tests; both default when the zero value
 	// is used through New.
 	now      func() time.Time
@@ -164,6 +170,12 @@ type Service struct {
 // /healthz to surface alongside the journal's own counts.
 func (s *Service) LedgerFailures() int64 {
 	return s.ledgerFailures.Load()
+}
+
+// TrainingFailures reports how many training-log writes have failed, for GET
+// /healthz. The answer was still served each time; the line for it is lost.
+func (s *Service) TrainingFailures() int64 {
+	return s.trainingFailures.Load()
 }
 
 // New builds a Service with real clock and id generation.
@@ -244,7 +256,7 @@ func (s *Service) askFreeform(ctx context.Context, caller Caller, req AskRequest
 	// version = digest of the question itself, since there is no file on
 	// disk to version.
 	version := freeformVersion(q)
-	return s.ask(ctx, caller, req, tmpl, version, eg, 0, question, keys)
+	return s.ask(ctx, caller, req, tmpl, version, eg, 0, question, keys, false)
 }
 
 // badQuestion refuses a template whose shape does not parse into an askable
@@ -293,7 +305,7 @@ func (s *Service) askTemplate(ctx context.Context, caller Caller, req AskRequest
 	if err != nil {
 		return s.badQuestion(caller, req, tmpl.ID, err)
 	}
-	return s.ask(ctx, caller, req, tmpl, tmpl.Version(), eg, heldBack, question, keys)
+	return s.ask(ctx, caller, req, tmpl, tmpl.Version(), eg, heldBack, question, keys, true)
 }
 
 func (s *Service) badState(caller Caller, req AskRequest, templateID, version string, err error) (Result, *Refusal) {
@@ -321,8 +333,9 @@ func asStateTooLarge(err error, target **template.StateTooLargeError) bool {
 // timeout, probability validation, ledger, journal. The caller (askTemplate
 // or askFreeform) has already called questionFor and handled its error, so
 // nothing here can fail for a reason that should have been caught before the
-// cap was taken.
-func (s *Service) ask(ctx context.Context, caller Caller, req AskRequest, tmpl template.Template, version string, eg template.Egress, heldBack int, q backend.Question, keys []string) (Result, *Refusal) {
+// cap was taken. trainable is false for a freeform question, which has no
+// template, no field allowlist and no version to train a model against.
+func (s *Service) ask(ctx context.Context, caller Caller, req AskRequest, tmpl template.Template, version string, eg template.Egress, heldBack int, q backend.Question, keys []string, trainable bool) (Result, *Refusal) {
 	if s.Cap != nil && !s.Cap.take() {
 		s.Journal.Refused(caller.AgentID, req.RunID, record.RefusedData{
 			Template: tmpl.ID, TemplateVersion: version, Reason: "over_hourly_cap",
@@ -436,6 +449,24 @@ func (s *Service) ask(ctx context.Context, caller Caller, req AskRequest, tmpl t
 			// than silently dropped: LedgerFailures is surfaced at
 			// GET /healthz for an operator to see.
 			s.ledgerFailures.Add(1)
+		}
+	}
+
+	// The opt-in training log: only an ANSWERED, templated ask reaches it, and
+	// what it gets is the egressed state (exactly the bytes the backend was
+	// handed) and the answer's identity. Never the probabilities, never the
+	// answer: traininglog.Line has no field for either, so a backend's output
+	// (a Jev answer above all) cannot become a training label through here.
+	// A write failure does not turn the answer into a refusal; it is counted.
+	if s.Training != nil && trainable {
+		err := s.Training.Put(traininglog.Line{
+			AnswerID: answerID, AnsweredAt: s.clock().UTC().Format(time.RFC3339Nano),
+			Template: tmpl.ID, TemplateVersion: version, Type: string(tmpl.Type),
+			State:   json.RawMessage(eg.Canonical()),
+			Backend: s.Backend.Name(), Model: ans.Model,
+		})
+		if err != nil {
+			s.trainingFailures.Add(1)
 		}
 	}
 

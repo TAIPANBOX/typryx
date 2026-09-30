@@ -37,6 +37,7 @@ import (
 	"github.com/TAIPANBOX/typryx/internal/record"
 	"github.com/TAIPANBOX/typryx/internal/service"
 	"github.com/TAIPANBOX/typryx/internal/template"
+	"github.com/TAIPANBOX/typryx/internal/traininglog"
 )
 
 var version = "dev"
@@ -65,8 +66,11 @@ func main() {
 	if len(args) >= 1 && args[0] == "calibration" {
 		os.Exit(calibrationCmd(args[1:], os.Stdout, os.Stderr))
 	}
+	if len(args) >= 1 && args[0] == "export" {
+		os.Exit(exportCmd(args[1:], os.Stdout, os.Stderr))
+	}
 	if len(args) >= 1 && args[0] != "serve" {
-		fmt.Fprintf(os.Stderr, "typryx: unknown subcommand %q. Known: serve (the default), templates check <dir>, connect <target>, calibration\n", args[0])
+		fmt.Fprintf(os.Stderr, "typryx: unknown subcommand %q. Known: serve (the default), templates check <dir>, connect <target>, calibration, export --training\n", args[0])
 		os.Exit(2)
 	}
 
@@ -117,8 +121,12 @@ type config struct {
 	timeoutMS       int64
 	eventsPath      string
 	ledgerDir       string
-	openai          *openaiBackendConfig
-	jev             *jevBackendConfig
+	// trainingDir is TYPRYX_TRAINING_DIR: empty (unset) is the default and
+	// means the training log is off, nothing is written and no directory is
+	// created.
+	trainingDir string
+	openai      *openaiBackendConfig
+	jev         *jevBackendConfig
 	// maxUsdPerDay is nil when TYPRYX_MAX_USD_PER_DAY is unset (no daily
 	// USD cap at all), and points to the parsed value otherwise: 0 is the
 	// explicit disabled state (a boot warning, like TYPRYX_MAX_CALLS_PER_HOUR=0),
@@ -456,7 +464,8 @@ func loadConfig() (*config, error) {
 		backendName:     backendName, templatesDir: templatesDir, templates: reg,
 		maxCallsPerHour: maxCallsPerHour, timeoutMS: timeoutMS,
 		eventsPath: os.Getenv("TYPRYX_EVENTS"), ledgerDir: os.Getenv("TYPRYX_LEDGER_DIR"),
-		openai: openaiCfg, jev: jevCfg, maxUsdPerDay: maxUsdPerDay,
+		trainingDir: os.Getenv("TYPRYX_TRAINING_DIR"),
+		openai:      openaiCfg, jev: jevCfg, maxUsdPerDay: maxUsdPerDay,
 	}, nil
 }
 
@@ -481,6 +490,8 @@ type runtime struct {
 	server  *http.Server
 	journal *record.Journal
 	ledger  *ledger.Ledger
+	// training is nil unless TYPRYX_TRAINING_DIR named a directory.
+	training *traininglog.Log
 }
 
 // buildRuntime turns a validated config into a runnable server: it opens the
@@ -508,6 +519,24 @@ func buildRuntime(cfg *config, log *slog.Logger) (*runtime, error) {
 		}
 		if led.SkippedTornLines > 0 {
 			log.Warn("the ledger's answer log had a torn last line, skipped", "count", led.SkippedTornLines)
+		}
+	}
+
+	var trainLog *traininglog.Log
+	if cfg.trainingDir != "" {
+		trainLog, err = traininglog.Open(cfg.trainingDir)
+		if err != nil {
+			_ = journal.Close()
+			if led != nil {
+				_ = led.Close()
+			}
+			return nil, err
+		}
+		if trainLog.TornBytes() > 0 {
+			log.Warn("the training log had a torn last line, truncated", "bytes", trainLog.TornBytes())
+		}
+		if cfg.ledgerDir == "" {
+			log.Warn("the training log is on but TYPRYX_LEDGER_DIR is unset: no outcome can be recorded, so nothing in it can be exported with a label")
 		}
 	}
 
@@ -555,6 +584,7 @@ func buildRuntime(cfg *config, log *slog.Logger) (*runtime, error) {
 		}
 	}
 	svc.Ledger = led
+	svc.Training = trainLog
 	svc.Journal = journal
 	svc.Timeout = time.Duration(cfg.timeoutMS) * time.Millisecond
 	svc.AllowFreeform = cfg.allowFreeform
@@ -573,12 +603,13 @@ func buildRuntime(cfg *config, log *slog.Logger) (*runtime, error) {
 		"templates", len(cfg.templates.List()), "credentials_required", cfg.keys.Configured(),
 		"journal", journalState(cfg.eventsPath),
 		"ledger", ledgerState(cfg.ledgerDir),
+		"training_log", trainingState(cfg.trainingDir),
 		"calls_per_hour", capState(cfg.maxCallsPerHour),
 		"usd_per_day", usdCapState(cfg.maxUsdPerDay),
 		"freeform", cfg.allowFreeform,
 		"accept_key_in_meta", cfg.acceptKeyInMeta)
 
-	return &runtime{server: srv, journal: journal, ledger: led}, nil
+	return &runtime{server: srv, journal: journal, ledger: led, training: trainLog}, nil
 }
 
 func run(log *slog.Logger) error {
@@ -593,6 +624,13 @@ func run(log *slog.Logger) error {
 		return err
 	}
 	journal, led, srv := rt.journal, rt.ledger, rt.server
+	if rt.training != nil {
+		defer func() {
+			if err := rt.training.Close(); err != nil {
+				log.Error("the training log did not close cleanly", "error", err)
+			}
+		}()
+	}
 	defer func() {
 		if err := journal.Close(); err != nil {
 			log.Error("the journal did not close cleanly", "error", err)
@@ -680,6 +718,15 @@ func journalState(path string) string {
 func ledgerState(dir string) string {
 	if dir == "" {
 		return "disabled: /v1/outcome will refuse with no_ledger, and answers are not ledgered"
+	}
+	return dir
+}
+
+// trainingState renders the training log for the startup line: "off" or the
+// directory. Never anything from inside the log.
+func trainingState(dir string) string {
+	if dir == "" {
+		return "off"
 	}
 	return dir
 }

@@ -28,6 +28,7 @@
           "TYPRYX_TEMPLATES": { "required": true },
           "TYPRYX_EVENTS": { "required": false },
           "TYPRYX_LEDGER_DIR": { "required": false },
+          "TYPRYX_TRAINING_DIR": { "required": false },
           "TYPRYX_MAX_CALLS_PER_HOUR": { "required": false },
           "TYPRYX_ALLOW_FREEFORM": { "required": false },
           "TYPRYX_ACCEPT_KEY_IN_META": { "required": false },
@@ -112,6 +113,10 @@
         "the_ledger_is_optional": {
           "value": "unset TYPRYX_LEDGER_DIR: answers are not ledgered and POST /v1/outcome refuses every call with no_ledger",
           "why": "an optional value needs its unset behaviour on record somewhere a launcher can read it, same reasoning vouchryx gives for VOUCHRYX_REVOKE_KEYS"
+        },
+        "the_training_log_is_optional_and_off_by_default": {
+          "value": "TYPRYX_TRAINING_DIR is unset by default: nothing is written and no directory is created. Set, every answered templated ask appends one line to training.ndjson in that directory (created 0700, file 0600): answer_id, answered_at, template, template_version, type, backend, model, and the egressed state only (exactly the fields the template's allowlist let through). It never carries a backend's answer or probabilities. `typryx export --training` pairs it with the human truths on the ledger",
+          "why": "a manifest schema field cannot express what an optional directory writes when set, what it never writes, or that unset creates nothing; stated here so a reader does not have to open internal/traininglog to learn it"
         },
         "accept_key_in_meta_is_mcp_only": {
           "value": "TYPRYX_ACCEPT_KEY_IN_META (off by default) changes POST /mcp alone: a tools/call with no X-Typryx-Key header may carry its credential at params._meta[\"typryx/key\"] instead, resolved through the same door.Keys path a header goes through; initialize, tools/list and a JSON-RPC notification need no credential either way; a header, when present, always wins, and the _meta entry is stripped from the request before internal/mcp ever parses it, used or not. /v1/ask, /v1/outcome and /v1/templates never accept a key from the body, whatever this flag says",
