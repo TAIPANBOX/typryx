@@ -502,6 +502,95 @@ in the plan.
     `TestAJevRefusalIsLoggedWithItsMachineCodeNeverItsMessage`, both in
     `internal/backend`; mutants M34-1 to M34-5, each caught)*
 
+35. **The training log is off by default and writes nothing when unset.**
+    `TYPRYX_TRAINING_DIR` is unset by default. Unset, no directory is
+    created, no file is written anywhere, `service.Service.Training` is nil,
+    and the boot line says `training_log=off`; `GET /healthz` says nothing
+    about a training log either. Set, the directory is created 0700 and
+    `training.ndjson` 0600, every line is one `O_APPEND` write with an fsync,
+    and a torn last line is truncated at `Open`, as in invariant 11. A line
+    that cannot be written never turns an answer into a refusal; it is counted
+    (`Service.TrainingFailures`, shown at `GET /healthz` only when the log is
+    on). The boot line names the directory and never anything inside it, and
+    warns when the log is on with no `TYPRYX_LEDGER_DIR` (no truth can be
+    recorded, so nothing could be exported with a label). *(test:
+    `TestTheTrainingLogIsOffUnlessADirectoryIsNamed` in `cmd/typryx`,
+    `TestTheTrainingLogIsOffByDefaultInTheRealBinary` in `internal/manifest`
+    against the built binary, `TestTheTrainingDirIsPrivateAndTheFileIsPrivate`,
+    `TestATornTrainingTailIsTruncatedBeforeTheNextWrite` in
+    `internal/traininglog`, `TestATrainingLogWriteFailureNeverTurnsAnAnswerIntoARefusal`
+    in `internal/service`; mutants: default directory set when unset, dir
+    0755, file 0644, torn tail not truncated, write failure not counted,
+    healthz reporting a log that is off, each caught)*
+
+36. **Only the egressed state reaches the training log, and only for an
+    answered, templated ask.** The state written is
+    `template.Egress.Canonical()`, the exact bytes the backend was handed,
+    so a field the template's `fields` holds back is on disk nowhere. An
+    ask that is unanswered (backend error, timeout, no or bad probabilities,
+    a cap), refused (unknown template, bad state, cap), or freeform (no
+    allowlist, no template version to train against) writes nothing. *(test:
+    `TestOnlyEgressedFieldsReachTheTrainingLog`,
+    `TestUnansweredAndRefusedAsksAreNotWrittenToTheTrainingLog`,
+    `TestAFreeformAskIsNotWrittenToTheTrainingLog`,
+    `TestACapRefusedAskIsNotWrittenToTheTrainingLog`, all in
+    `internal/service`; mutants: the raw request state written instead of
+    the egressed one, an unanswered ask written (two variants), a freeform
+    ask written, each caught)*
+
+37. **The training log never carries a backend's answer or probabilities,
+    so a hosted answer can never become a training label through it.**
+    TypeSafe's agreement forbids using Jev's output to train another model.
+    `traininglog.Line` has exactly eight fields (`answer_id`, `answered_at`,
+    `template`, `template_version`, `type`, `state`, `backend`, `model`),
+    none of which can hold an answer or a distribution, and the package
+    imports neither `internal/backend` nor `internal/ledger`, so it cannot
+    even name one. `backend` and `model` are there so an operator can tell
+    which model answered; they say nothing about what it answered. *(test:
+    `TestATrainingLineHasNoFieldThatCouldHoldABackendAnswer` (reflects over
+    the struct and the written line), `TestThePackagesCannotSeeABackendAnswer`
+    (`go list -deps`), both in `internal/traininglog`;
+    `TestTheTrainingLogNeverCarriesABackendAnswerOrProbabilities` in
+    `internal/service`; mutants: probabilities added to the line, the
+    training package importing the ledger, each caught)*
+
+38. **Export labels come only from human truths.** `typryx export
+    --training` joins `training.ndjson` with `outcomes.ndjson` by
+    `answer_id` and writes `{template, template_version, type, state,
+    label}` where `label` is the truth posted to `/v1/outcome`. It never
+    opens `answers.ndjson`, where the backend's answer lives. Rules, in
+    order, each counted per template: an `answer_id` repeated in the training
+    log is skipped (`skipped_duplicate_id`); no truth is `skipped_no_truth`;
+    two truths for one id is `skipped_duplicate_id`; a truth recorded against
+    a different template or `template_version` is
+    `skipped_version_mismatch`; a truth of the wrong shape for its type
+    (choice a string, score a non-negative integer, noul a boolean) is
+    `skipped_bad_truth`. Malformed lines, a torn last line and truths with no
+    training line are counted and never repaired. Read-only on both
+    directories, and `--out` inside either is refused. One thing this cannot
+    know: whether whoever posted a truth derived it from a model. *(test:
+    `TestExportJoinsByAnswerIDAndLabelsWithTheHumanTruth`,
+    `TestExportNeverUsesABackendAnswerAsALabel`,
+    `TestExportSkipsAnAnswerWithNoTruthAndCountsIt`,
+    `TestExportSkipsATruthScoredAgainstAnotherTemplateVersion`,
+    `TestExportRefusesAnAnswerIDThatAppearsTwice`,
+    `TestExportSurvivesHostileLines` (200 seeds),
+    `TestExportIsReadOnlyOnBothDirectories`, all in `internal/traininglog`;
+    `TestExportOutWritesAPrivateFileAndRefusesToWriteInsideAnInput` in
+    `cmd/typryx`; `TestTheTrainingLogLoopRunsThroughTheRealBinary` in
+    `internal/manifest`; mutants: the ledger answer used as a label when no
+    truth exists, version mismatch ignored, repeated ids exported, first of
+    two truths taken, wrong-shaped truth accepted, torn tail truncated by the
+    export, `--out` allowed inside an input, each caught)*
+
+@decided 2026-09-30: a customer chooses one of three data modes for typed
+answers (a hosted Jev, their own model on their own hardware, or off). typryx
+does not train or ship models. It offers an opt-in local training log, off by
+default, from which a customer can export their own questions with their own
+human truths and fine-tune a model of their own; `typryx calibration` then
+compares the new model version with the old per template, never pooled
+(invariant 22).
+
 @decided 2026-09-25: tokenfuse is not changed for typryx. It runs exactly as it
 does without typryx, and typryx joins it through the MCP broker's named-upstream
 configuration alone; the agent behind a brokered call stays on tokenfuse's own
@@ -564,7 +653,9 @@ request bodies) and is a CLI/HTTP surface another repo will eventually
 consume. It becomes **T3** the day wardryx or tokenfuse actually consume it
 (phase J), per the estate's testing rule; nothing here reaches that bar yet
 because nothing downstream depends on it. No Fable review (paused
-estate-wide).
+estate-wide). The training log (invariants 35 to 38) stores customer data, so
+that one change was built and tested at **T3**: red first, mutants named
+against each invariant, and a process-level test on the built binary.
 
 Phase A's own 13 scenario tests were written AFTER the implementation, not
 before it: this is a stated deviation, not a claim of red-first, and it was

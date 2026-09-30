@@ -13,7 +13,7 @@ and recorded.
 ![Go 1.27](https://img.shields.io/badge/Go-1.27-4493f8)
 ![one direct dependency](https://img.shields.io/badge/direct%20dependency-one-2dd4bf)
 ![license Apache 2.0](https://img.shields.io/badge/license-Apache--2.0-9aa7b8)
-![tests](https://img.shields.io/badge/tests-898-brightgreen)
+![tests](https://img.shields.io/badge/tests-945-brightgreen)
 
 </div>
 
@@ -129,6 +129,13 @@ accident. There are three:
   another model. Terms change; an operator must still read the current ones before
   setting `TYPRYX_BACKEND=jev`. See [Jev backend](#jev-backend) and [What it will not
   do](#what-it-will-not-do).
+- **The training log** (`TYPRYX_TRAINING_DIR`, off by default). Optional, and not a
+  fourth place your data goes: when you set it, every answered question also appends
+  one line to a file on your own disk, holding the fields the template let through and
+  nothing a backend said. It stays there, under your directory, readable by its owner
+  only, until you export it or delete it. Unset, nothing is written and no directory is
+  created. See [Your own model, trained on your own
+  questions](#your-own-model-trained-on-your-own-questions).
 - **`TYPRYX_BACKEND=stub`** sends nothing anywhere: deterministic, free, and only for
   tests and demos.
 
@@ -575,6 +582,78 @@ go run ./examples/speed -mode reasoning -url https://api.openai.com/v1 -model gp
 
 ![A reliability diagram: the diagonal is perfect calibration, and qwen2.5:3b and qwen2.5:7b's measured bins both sit well below it, meaning both models are confident far more often than they are right](docs/calibration.svg)
 
+## Your own model, trained on your own questions
+
+@decided 2026-09-30: a customer can train a model of their own on their own questions
+and their own human judgements; typryx supplies the data loop and the measurement, not
+the training. **typryx does not train, fine-tune, host, or ship a model.** What it does
+is keep the two records a fine-tune needs, and let you compare the result with the model
+it replaces.
+
+```
+ask -> ledger -> truth via /v1/outcome -> training log -> export
+    -> you fine-tune your own model, on your own hardware
+    -> serve it through openai-logprobs
+    -> typryx calibration compares the new model version with the old, per template
+    -> you switch
+```
+
+1. **Ask.** With `TYPRYX_LEDGER_DIR` set, every answered question is on the ledger.
+2. **A human judges.** Post the truth for an answer to `POST /v1/outcome` (verdryx's
+   `typed` grader does this; so can `curl`). A truth is recorded once per answer.
+3. **The training log.** With `TYPRYX_TRAINING_DIR` set, every answered, templated
+   question also appends one line to `training.ndjson` in that directory (created
+   `0700`, the file `0600`, every write fsynced, a torn last line truncated at start):
+
+   ```json
+   {"answer_id":"9f2c...","answered_at":"2026-09-30T12:00:00Z","template":"request.complexity","template_version":"3b1e...","type":"choice","state":{"prompt":"summarise this ticket"},"backend":"openai-logprobs","model":"qwen2.5:7b"}
+   ```
+
+   `state` is exactly what the template's `fields` let through to the backend, so a
+   field the template holds back is on your disk nowhere. The line carries **neither the
+   backend's answer nor its probabilities**: the type has no field for them, and the
+   package cannot import the code that knows them. Unanswered, refused and freeform
+   questions write nothing. The log starts when you switch it on; answers given before
+   that are not in it. typryx never rotates or deletes the file.
+4. **Export.** One command pairs each logged state with the human truth for it:
+
+   ```sh
+   typryx export --training --training-dir ./training --ledger ./ledger --out train.jsonl
+   ```
+
+   Every row is `{"template","template_version","type","state","label"}`, and `label` is
+   the truth a human posted, as posted (a choice name, a score index, `true` or `false`).
+   Counts per template go to stderr (`exported`, `skipped_no_truth`, and the skips below),
+   so stdout stays clean JSONL when you omit `--out`. Both directories are only read.
+
+   An answer with no truth is skipped and counted, however confident the backend was. A
+   truth recorded against another template version than the logged question is skipped
+   (the question changed; the pair is not guessed at). A repeated `answer_id`, two truths
+   for one answer, a truth of the wrong shape for its type, and malformed lines are
+   skipped and counted too; a torn last line is counted and left on disk.
+5. **Fine-tune.** With your own tooling, on your own hardware. typryx ships no trainer,
+   no base model, and no recipe, and makes no claim about how well any fine-tune works.
+6. **Serve and measure.** Serve the tuned model behind an OpenAI-compatible server and
+   point `TYPRYX_OPENAI_URL` and `TYPRYX_OPENAI_MODEL` at it (see [Local model
+   backend](#local-model-backend)). `typryx calibration` groups by template, template
+   version, backend and model and never pools them, so the new model is scored beside the
+   old one on the same template rather than averaged into it. A `drift` verdict is
+   reported, never acted on.
+7. **Switch.** Changing `TYPRYX_OPENAI_MODEL` is yours to do, when the numbers say so.
+
+**Why the export carries human truths only.** TypeSafe's agreement forbids using Jev's
+output to train another model (see [Where your data goes](#where-your-data-goes)), so a
+Jev answer must never become a training label, through this file or any other. The
+training log holds no backend answer, and the export takes its label from a truth a
+human posted, never from `answers.ndjson`. What typryx cannot see is how a truth was
+produced: a person posting a label they copied from a model's answer would defeat this,
+and the `source` field on the outcome is the poster's own word.
+
+The training log holds your questions, which can be sensitive. It is written only under
+a template's allowlist and only to your own disk, at `0600` in a `0700` directory; the
+export file is `0600` as well. Where that disk is backed up, and for how long, is yours
+to decide.
+
 ## What leaves the box
 
 ![Of five fields in the state, only the one the template names travels to the backend; the other four are held back and counted](docs/egress.svg)
@@ -603,6 +682,10 @@ live template registry) and appended to `outcomes.ndjson`. A second outcome for 
 `answer_id` is refused with `409 outcome_exists`, including across a restart. A torn
 last line left by a crash mid-write is truncated on disk before the file is reopened, so
 the next answer is written cleanly rather than merged into the wreckage.
+
+When `TYPRYX_TRAINING_DIR` is set, a third file, `training.ndjson`, records the egressed
+state of each answered question for a customer's own fine-tuning; see [Your own model,
+trained on your own questions](#your-own-model-trained-on-your-own-questions).
 
 ## Templates
 
@@ -657,6 +740,7 @@ triage.anomaly_class 6b4497aec4a78b57c2b0e0b0481faa07e34eb0b7aa8297d45c6f12f4d12
 | `TYPRYX_TEMPLATES` | **yes** | none | directory of `*.json` templates |
 | `TYPRYX_EVENTS` | no | none = journal off | NDJSON agent-event path |
 | `TYPRYX_LEDGER_DIR` | no | none | holds `answers.ndjson`, `outcomes.ndjson`; unset means `POST /v1/outcome` refuses every call with `no_ledger`, and answers are not ledgered |
+| `TYPRYX_TRAINING_DIR` | no | unset = the training log is off | a directory (created `0700`) that gets `training.ndjson` (`0600`): one line per answered, templated ask holding the egressed state and the answer's identity, never a backend's answer or probabilities; unset, nothing is written and no directory is created; see [Your own model](#your-own-model-trained-on-your-own-questions) |
 | `TYPRYX_MAX_CALLS_PER_HOUR` | no | `1000` | `0` disables it, with a warning logged at boot |
 | `TYPRYX_ALLOW_FREEFORM` | no | unset | only `1`/`true` count |
 | `TYPRYX_ACCEPT_KEY_IN_META` | no | unset | only `1`/`true` count; lets a `POST /mcp` `tools/call` with no `X-Typryx-Key` header read its credential from `params._meta["typryx/key"]` instead; see [Connect it](#connect-it) |
@@ -707,6 +791,12 @@ from the environment value itself and never logged; see [Jev backend](#jev-backe
   default; off, `x-fuse-run-id` and `x-fuse-agent-id` are never sent, to any endpoint.
 - **No spend cap that measures nothing.** `TYPRYX_MAX_USD_PER_DAY` set to a positive
   number over a backend that always reports `cost_usd` 0 refuses to start.
+- **No training log unless a directory is named, and no backend answer in it, ever.**
+  `TYPRYX_TRAINING_DIR` is unset by default; set, the log holds the egressed state and
+  the answer's identity only, and `typryx export --training` takes its labels from
+  human-posted truths alone, so a hosted model's answer cannot become a training label.
+- **No model training, and no model shipped.** typryx keeps the data loop and the
+  measurement; fine-tuning happens on the customer's own hardware, with their own tools.
 - **No claim about a vendor model's speed, cost, or accuracy** beyond what a dated
   run in this repository recorded. Jev (TypeSafe AI) has been run live once (eight
   asks, 2026-09-30); its published price and availability are vendor figures, quoted
@@ -728,7 +818,7 @@ go build ./...
 ./scripts/gates-have-teeth.sh
 ```
 
-369 tests. `go test ./... -race` covers every package; `internal/manifest` builds and
+408 tests. `go test ./... -race` covers every package; `internal/manifest` builds and
 starts the real binary to prove `components.json` against what it actually does; CI's
 `image` job builds the Dockerfile on every push and pull request, pushing nowhere.
 
@@ -763,6 +853,13 @@ already validated the value; `mcp.go` itself is unchanged. Unchanged: `internal/
 `internal/record`, `internal/service`, `internal/template`, `examples/calibration`,
 `cmd/typryx` (81.4%, inside rounding of the 80.8% above; the new config/wiring tests moved
 individual lines, not the package's shape).
+
+Coverage after the training log (measured 2026-09-30, `go test ./... -cover`): the new
+`internal/traininglog` is **89.7%**, and what is uncovered there is the error branches of
+file I/O (a failed `OpenFile`, `Sync` or `Truncate` on a file the test just made).
+`cmd/typryx` moved to 83.0% (from 82.8%), `internal/service` to 94.6% (from 94.5%),
+`internal/api` unchanged at 98.9%. Nineteen planted faults (CLAUDE.md invariants 35 to 38)
+were each caught by a named test.
 
 `scripts/gates-have-teeth.sh` plants 18 faults, one per gate behaviour, and requires
 each gate to fail on its own fault and pass on what it must not catch. Eleven defects
@@ -834,6 +931,21 @@ repository, and is now covered.
   (`WITH_TYPED=1`) and stack-up (`--with-typed`) were run with it on one development Mac;
   stack-k8s (`deploy.sh --with-typed`) is validated client-side only, no cluster was
   created for it. None sends typryx's journal to the shared event bus yet.
+- **No fine-tune has been run end to end from an export by this project.** The loop up to
+  the export is proved by tests and by the built binary (ask, truth, training log, export,
+  on the `stub` backend); nothing here has trained a model on an exported file, served
+  the result through `openai-logprobs`, or measured it against the model it replaced, so
+  whether a model tuned on a customer's own judgements beats the model it replaces is
+  unmeasured.
+- **The export cannot tell where a truth came from.** It pairs a state with whatever
+  `label` was posted to `/v1/outcome`; if a poster copied a model's answer in as a truth,
+  that answer becomes a label, and the `source` field is the poster's own claim.
+- **The training log has no rotation, retention or deletion.** It grows until an
+  operator removes it, it is not encrypted beyond file permissions, and a line lost to a
+  write failure is counted at `GET /healthz` but not retried. An fsync per write is
+  unmeasured under load.
+- **Class balance, deduplication and sampling are the customer's job.** An export is
+  every answer that has a truth, in log order, not a balanced or de-duplicated set.
 - **The manifest test and the Docker and tokenfuse runs prove behavior on one development Mac,
   on these commits; they are not a claim about any other environment.**
 
@@ -859,6 +971,10 @@ repository, and is now covered.
       event bus; an ask through the broker was measured answered in each.
 - [x] **Phase H**: verdryx's `typed` grader asks typryx and posts human labels back
       to `/v1/outcome`.
+- [x] **Training log**: an opt-in local log of answered questions and
+      `typryx export --training`, so a customer can tune a model of their own; no
+      fine-tune has been run from it yet. See [Your own
+      model](#your-own-model-trained-on-your-own-questions).
 - [ ] **Phase I**: a judge bake-off with a live Jev, prepared in verdryx's
       `examples/bakeoff`; a key and a spend decision exist since 2026-09-30, the
       bake-off itself has not been run.
