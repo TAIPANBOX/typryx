@@ -117,9 +117,17 @@ accident. There are three:
   SHA-384 of what did, never the data itself. Choosing a hosted backend adds a data
   processor to your stack, with its own jurisdiction, retention, and agreement; for a
   regulated organisation, that choice belongs to its compliance function, not to
-  whoever sets an environment variable. **TypeSafe's data-handling terms for Jev have
-  not been read or verified by this project.** An operator must read them before
-  setting `TYPRYX_BACKEND=jev`; see [Jev backend](#jev-backend) and [What it will not
+  whoever sets an environment variable. TypeSafe's terms were read by this project on
+  2026-09-30 (the Master Customer Agreement at typesafe.ai/legal/mca, last updated
+  2026-09-23, and the Data Processing Addendum at typesafe.ai/legal/data-processing,
+  last updated 2026-04-24); what was found, not legal advice: TypeSafe commits not to
+  train on customer data without consent; neither document states a retention period
+  or where data is hosted; the DPA uses the EU Standard Contractual Clauses with the
+  UK addendum under Irish law, while the agreement itself is under California law; and
+  the agreement forbids using the service's output for model distillation or to build a
+  similar or competing product, so Jev's answers must never become training labels for
+  another model. Terms change; an operator must still read the current ones before
+  setting `TYPRYX_BACKEND=jev`. See [Jev backend](#jev-backend) and [What it will not
   do](#what-it-will-not-do).
 - **`TYPRYX_BACKEND=stub`** sends nothing anywhere: deterministic, free, and only for
   tests and demos.
@@ -372,12 +380,30 @@ input tokens plus `TYPRYX_JEV_PRICE_PER_MTOK_OUTPUT` times output tokens, both
 optional and defaulting to 0: unset means `cost_usd` is always 0 and this backend
 is unpriced, never a hardcoded number.
 
-Built and tested only against an `httptest` fake replaying the wire shape
-documented at docs.typesafe.ai/api and /introduction/quickstart, pinned verbatim
-in `internal/backend/testdata/jev_example_response.json` (read 2026-09-25 by the
-session model). **Not yet run against the live API**: there is no key, and calling
-a paid service is a spending decision made separately and in advance, not
-something a build step does on its own. See NOT PROVEN and Status.
+Built and tested against an `httptest` fake replaying the wire shape documented at
+docs.typesafe.ai/api and /introduction/quickstart, pinned verbatim in
+`internal/backend/testdata/jev_example_response.json` (read 2026-09-25 by the
+session model), and since 2026-09-30 run against the live API once.
+
+**Measured live, 2026-09-30**, on a development Mac, typryx built at `fab8545`,
+`TYPRYX_BACKEND=jev` with the default `TYPRYX_JEV_URL` and `TYPRYX_JEV_MODEL`
+(`jev-latest`), a real key read from a file, and `TYPRYX_JEV_PRICE_PER_MTOK_INPUT=0.042`:
+eight asks over all four example templates (two per template, one `choice`
+question each for `request.complexity` and `triage.anomaly_class`, `score` for
+`eval.answer_quality`, `noul` for `eval.outcome_met`) all came back `200` and
+answered, each served by `jev-1.13.0` as the response's own `model` field named
+it, 202 to 276 ms per ask as typryx measured it from this network, and about
+USD 0.00014 for all eight at that configured price. Every answer matched the
+obvious label an operator would give these hand-written cases (for example
+`runaway_agent` for 48,000 identical calls in 20 minutes, `0.99` for a correct
+sum and `0.12` for a wrong one); a state carrying one field the template does not
+name reported `held_back_fields: 1`. The same build with a deliberately wrong key
+got `401` from the API and served `unanswered` with `backend_error`, logged only
+`status=401`, and echoed nothing of the response body; no fragment of either key
+appeared in the server log, the journal, or the ledger. One run of eight
+hand-written cases, from one network: evidence the wire mapping and the refusal
+path work against the real service, not a measurement of Jev's accuracy,
+calibration, or latency in general. See NOT PROVEN.
 
 ## Calibration
 
@@ -680,10 +706,10 @@ from the environment value itself and never logged; see [Jev backend](#jev-backe
   default; off, `x-fuse-run-id` and `x-fuse-agent-id` are never sent, to any endpoint.
 - **No spend cap that measures nothing.** `TYPRYX_MAX_USD_PER_DAY` set to a positive
   number over a backend that always reports `cost_usd` 0 refuses to start.
-- **No claim about a vendor model's speed, cost, or accuracy.** Jev (TypeSafe AI) is
-  a typed-decision model backend built and tested against a replayed wire shape, not
-  yet run live; its published price and availability are vendor figures, quoted as
-  vendor figures or not at all.
+- **No claim about a vendor model's speed, cost, or accuracy** beyond what a dated
+  run in this repository recorded. Jev (TypeSafe AI) has been run live once (eight
+  asks, 2026-09-30); its published price and availability are vendor figures, quoted
+  as vendor figures or not at all.
 
 ## What is checked, and how
 
@@ -785,10 +811,12 @@ repository, and is now covered.
   `agent_id=agent://demo.example/tester`, exactly what the ask carried. One run, one
   model, one gateway build; not a claim about any other environment or about
   tokenfuse's own behavior changing over time.
-- **The jev backend has never made a live call.** Built and tested only against an
-  `httptest` fake replaying the documented wire shape; there is no key and no spend
-  approval to call the real `api.typesafe.ai`. See [Jev backend](#jev-backend) and
-  [Status](#status).
+- **The jev backend has made one live run, not a sustained one.** Eight hand-written
+  asks and one wrong-key ask on 2026-09-30 (see [Jev backend](#jev-backend)). Never
+  exercised live: the `429`/`529` retry path, a state near `max_state_bytes`, a
+  `422` validation failure, a `score` template with more than four levels, or any
+  volume beyond eight asks. Jev's accuracy and calibration on typryx's own questions
+  are unmeasured; eight obvious cases say nothing about either.
 - **Jev's rate limits, maximum state size, and maximum questions per call are
   undocumented by the vendor.** Nothing here can measure a bound the vendor has not
   published; `retryDelay`'s 2-second cap is this repository's own choice, not a
@@ -820,8 +848,8 @@ repository, and is now covered.
       [Local model backend](#local-model-backend).
 - [x] **Phase E**: calibration (`typryx calibration`), measured against `stub`,
       `qwen2.5:3b`, and `qwen2.5:7b`; see [Calibration](#calibration).
-- [x] **Phase D**: the `jev` backend is built and tested against a replayed wire shape;
-      the live call still needs a decision on signing up and spending. See
+- [x] **Phase D**: the `jev` backend is built, tested against a replayed wire shape,
+      and run live once on 2026-09-30 over all four example templates. See
       [Jev backend](#jev-backend).
 - [x] **Phase F**: the four event types are registered in agent-passport's SPEC 6.2.
 - [x] **Phase G**: opt-in launcher wiring (stack-single, stack-up, stack-k8s) and a
@@ -831,7 +859,8 @@ repository, and is now covered.
 - [x] **Phase H**: verdryx's `typed` grader asks typryx and posts human labels back
       to `/v1/outcome`.
 - [ ] **Phase I**: a judge bake-off with a live Jev, prepared in verdryx's
-      `examples/bakeoff` and waiting for a Jev key and a spend decision.
+      `examples/bakeoff`; a key and a spend decision exist since 2026-09-30, the
+      bake-off itself has not been run.
 - [ ] **Deeper consumers** (wardryx, tokenfuse's router, costcrew, engram), only if
       phase I shows they are worth it.
 

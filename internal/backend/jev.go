@@ -9,10 +9,9 @@
 //
 // Built and tested only against an httptest fake that replays the wire shape
 // documented at docs.typesafe.ai/api and /introduction/quickstart (pinned
-// verbatim in testdata/jev_example_response.json, read 2026-09-25); there is
-// no key and no spend approval to call the real api.typesafe.ai, so nothing
-// here has been run against it. See README.md's "Jev backend" section and
-// NOT PROVEN.
+// verbatim in testdata/jev_example_response.json, read 2026-09-25), and run
+// against the real api.typesafe.ai once on 2026-09-30 (eight asks, one
+// wrong-key refusal). See README.md's "Jev backend" section and NOT PROVEN.
 package backend
 
 import (

@@ -540,12 +540,15 @@ off, slow or failing does not break the consumer.
 ### Not built yet
 
 - **`jev`** (phase D) is built: `TYPRYX_BACKEND=jev` starts and makes real
-  calls to `TYPRYX_JEV_URL`. It has been run only against an httptest fake
-  replaying the wire shape documented at docs.typesafe.ai (pinned in
-  `internal/backend/testdata/jev_example_response.json`); there is no key
-  and no spend approval to call the real `api.typesafe.ai`, so nothing here
-  has been run against it. See README's "Jev backend" section and NOT
-  PROVEN. `openai-logprobs` (phase C) and calibration (phase E) are also
+  calls to `TYPRYX_JEV_URL`. Tested against an httptest fake replaying the
+  wire shape documented at docs.typesafe.ai (pinned in
+  `internal/backend/testdata/jev_example_response.json`), and run live once
+  on 2026-09-30: eight asks over the four example templates answered by
+  `jev-1.13.0`, and a wrong key refused with `401` and nothing echoed. The
+  live retry path, large states and any sustained volume are unexercised.
+  See README's "Jev backend" section and NOT PROVEN. Jev output must never
+  become training labels for another model: TypeSafe's agreement forbids
+  distillation and building a competing product from its output. `openai-logprobs` (phase C) and calibration (phase E) are also
   built; see README's "Local model backend" and "Calibration" sections.
 - **MCP behind tokenfuse's broker**: untested until phase B2. See README.
 

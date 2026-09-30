@@ -85,9 +85,9 @@
           "value": [],
           "why": "openai-logprobs (phase C) and jev (phase D) are both built now; kept as an empty list rather than removed, so a reader knows this field is maintained and not merely absent"
         },
-        "jev_is_built_but_not_run_live": {
-          "value": "TYPRYX_BACKEND=jev starts and makes real HTTP calls to TYPRYX_JEV_URL; it has been run only against an httptest fake replaying the documented wire shape, never against the real api.typesafe.ai (no key, and a live call is a spending decision)",
-          "why": "a manifest schema field cannot express 'built but never run against the real service'; stated here so a reader does not have to open README.md's NOT PROVEN section to learn it"
+        "jev_run_live_once": {
+          "value": "TYPRYX_BACKEND=jev starts and makes real HTTP calls to TYPRYX_JEV_URL; tested against an httptest fake replaying the documented wire shape, and run against the real api.typesafe.ai once on 2026-09-30 (eight asks over the four example templates, one wrong-key refusal); the retry path and sustained volume are unexercised live",
+          "why": "a manifest schema field cannot express how far a backend has been run against the real service; stated here so a reader does not have to open README.md's NOT PROVEN section to learn it"
         },
         "openai_key_never_read_from_env_value": {
           "value": "TYPRYX_OPENAI_KEY_FILE names a file path; the file's trimmed contents are used as the bearer key and are never logged or echoed into an error",
