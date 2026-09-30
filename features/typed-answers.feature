@@ -320,3 +320,143 @@ Feature: Typed answers, as an option a customer adds to the stack
     And a tools/call carries a valid credential only under _meta
     When the call arrives with no X-Typryx-Key header
     Then it is refused exactly as it always was
+
+  # @decided 2026-09-30: a customer may keep a local training log of their
+  # own questions, off by default, and train a model of their own on it with
+  # their own hardware. typryx does not train or ship models. The log holds
+  # only what left the box under the template's own allowlist, never what a
+  # backend answered, and the export pairs it with truths a human posted, so
+  # a hosted backend's answer can never become a training label through it.
+
+  # @test:TestTheTrainingLogIsOffUnlessADirectoryIsNamed
+  Scenario: The training log is off unless a directory is named
+    Given TYPRYX_TRAINING_DIR is not set
+    When the service starts
+    Then no training log is open
+    And no directory or file is created
+    And the boot line says the training log is off
+
+  # @test:TestTheTrainingLogIsOffByDefaultInTheRealBinary
+  Scenario: The real binary writes no training data by default
+    Given the built binary started with no TYPRYX_TRAINING_DIR
+    When it answers a question
+    Then nothing is written beside the ledger or in its working directory
+
+  # @test:TestAnAnsweredAskIsWrittenToTheTrainingLog
+  Scenario: An answered question is appended to the training log
+    Given TYPRYX_TRAINING_DIR names a directory
+    When a templated question is answered
+    Then one line is appended naming the answer, the template and its version, the type, the backend and the model
+    And it holds the state that was sent to the backend
+
+  # @test:TestOnlyEgressedFieldsReachTheTrainingLog
+  Scenario: A field the template holds back never reaches the training log
+    Given a template that names one field
+    And a question whose state carries two more
+    When the question is answered
+    Then the training line's state holds only the named field
+
+  # @test:TestTheTrainingLogNeverCarriesABackendAnswerOrProbabilities
+  Scenario: A backend's answer and probabilities are never written
+    Given a backend that answers with distinctive probabilities
+    When the question is answered
+    Then the training line carries neither the answer nor any probability
+
+  # @test:TestThePackagesCannotSeeABackendAnswer
+  Scenario: The training code cannot even name a backend's answer
+    Given the packages that write and export the training log
+    When their dependencies are listed
+    Then neither the backend package nor the ledger package is among them
+
+  # @test:TestUnansweredAndRefusedAsksAreNotWrittenToTheTrainingLog
+  Scenario: Only answered questions are written
+    Given a question the backend failed, left without probabilities, or answered badly
+    And questions refused before any backend was asked
+    When each is processed
+    Then the training log gains no line for any of them
+
+  # @test:TestAFreeformAskIsNotWrittenToTheTrainingLog
+  Scenario: A question with no template is not written
+    Given freeform questions are switched on
+    When one is answered
+    Then the training log gains no line, since there is no allowlist or template version to train against
+
+  # @test:TestTheTrainingDirIsPrivateAndTheFileIsPrivate
+  Scenario: The training data is readable by its owner only
+    Given a training directory that does not exist yet
+    When the log is opened and written
+    Then the directory is created private to its owner
+    And the file is readable and writable by its owner only
+
+  # @test:TestATornTrainingTailIsTruncatedBeforeTheNextWrite
+  Scenario: A crash mid-write cannot corrupt the next line
+    Given a training file whose last line was cut short
+    When the service opens it and answers another question
+    Then the fragment is removed first and the new line stands on its own
+
+  # @test:TestATrainingLogWriteFailureNeverTurnsAnAnswerIntoARefusal
+  Scenario: A failing training log never costs a caller their answer
+    Given a training log that can no longer be written
+    When a question is answered
+    Then the caller still gets the answer
+    And the lost line is counted
+
+  # @test:TestTheBootLineSaysWhereTheTrainingLogIsAndNeverWhatIsInIt
+  Scenario: The boot line names the training directory and never its contents
+    Given a training directory that already holds a line
+    When the service starts with the log on
+    Then the boot line says where the log is
+    And nothing from inside it is logged
+
+  # @test:TestExportJoinsByAnswerIDAndLabelsWithTheHumanTruth
+  Scenario: The export pairs each state with the truth a human posted
+    Given answers in the training log and truths posted to the outcome route
+    When the training set is exported
+    Then each row holds the template, its version, the type, the state, and the truth as its label
+
+  # @test:TestExportSkipsAnAnswerWithNoTruthAndCountsIt
+  Scenario: An answer nobody has judged yet is left out and counted
+    Given an answer with no truth posted
+    When the training set is exported
+    Then it is not in the output
+    And it is counted per template as skipped for having no truth
+
+  # @test:TestExportNeverUsesABackendAnswerAsALabel
+  Scenario: A hosted backend's answer can never become a label
+    Given a ledger whose answers carry a backend's confident answer
+    And no truth posted for them
+    When the training set is exported
+    Then nothing is exported
+    And where a human truth disagrees with the backend, the label is the human truth
+
+  # @test:TestExportSkipsATruthScoredAgainstAnotherTemplateVersion
+  Scenario: A truth for a different version of the question is not paired
+    Given a truth recorded against another template version than the training line
+    When the training set is exported
+    Then that pair is skipped and counted, not guessed at
+
+  # @test:TestExportRefusesAnAnswerIDThatAppearsTwice
+  Scenario: An ambiguous answer id is never exported
+    Given an answer id that appears twice in the training log, and another with two truths
+    When the training set is exported
+    Then neither is exported, and each is counted
+
+  # @test:TestExportSurvivesHostileLines
+  Scenario: Garbage in either file cannot crash or pollute the export
+    Given hundreds of mangled training and outcome files
+    When the training set is exported from each
+    Then it never fails, and every row it writes is complete with a label of the right shape
+
+  # @test:TestExportIsReadOnlyOnBothDirectories
+  Scenario: Exporting changes nothing on disk
+    Given a training log and a ledger, each with a torn last line
+    When the training set is exported
+    Then every file in both directories is byte for byte what it was
+
+  # @test:TestTheTrainingLogLoopRunsThroughTheRealBinary
+  Scenario: The whole loop runs on the built binary
+    Given the built binary with a ledger and a training directory
+    And two answered questions, one of which a human then judges
+    When the training set is exported
+    Then one row comes out, labelled with the human's truth
+    And no held-back field, probability, or backend answer is anywhere in the files

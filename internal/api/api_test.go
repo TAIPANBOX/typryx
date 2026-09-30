@@ -22,6 +22,7 @@ import (
 	"github.com/TAIPANBOX/typryx/internal/record"
 	"github.com/TAIPANBOX/typryx/internal/service"
 	"github.com/TAIPANBOX/typryx/internal/template"
+	"github.com/TAIPANBOX/typryx/internal/traininglog"
 )
 
 type noopMCP struct{ called bool }
@@ -791,4 +792,70 @@ func mutateJSON(b []byte, seed int64) []byte {
 		}
 	}
 	return out
+}
+
+// A training-log write failure is counted and visible at GET /healthz, but
+// only when a training log is on: with none configured, the health body says
+// nothing about one (off means off, including in what is reported).
+func TestATrainingLogFailureIsVisibleAtHealthzOnlyWhenTheLogIsOn(t *testing.T) {
+	dir := t.TempDir()
+	tmplDir := filepath.Join(dir, "templates")
+	os.Mkdir(tmplDir, 0o755)
+	tmpl := template.Template{ID: "eval.outcome_met", Type: template.TypeNoul, Instructions: "is it true", Fields: []string{"task"}}
+	b, _ := json.Marshal(tmpl)
+	os.WriteFile(filepath.Join(tmplDir, "t.json"), b, 0o644)
+	reg, _, _ := template.LoadDir(tmplDir)
+	j, _ := record.Open("")
+
+	health := func(svc *service.Service) map[string]any {
+		srv := &api.Server{Keys: door.ParseKeys(""), Service: svc, MCP: &noopMCP{}}
+		ts := httptest.NewServer(api.NewMux(srv))
+		defer ts.Close()
+		resp, err := http.Post(ts.URL+"/v1/ask", "application/json",
+			bytes.NewReader([]byte(`{"template":"eval.outcome_met","state":{"task":"t"}}`)))
+		if err != nil {
+			t.Fatalf("ask: %v", err)
+		}
+		resp.Body.Close()
+		if resp.StatusCode != http.StatusOK {
+			t.Fatalf("the answer itself must still succeed, got %d", resp.StatusCode)
+		}
+		hr, err := http.Get(ts.URL + "/healthz")
+		if err != nil {
+			t.Fatalf("healthz: %v", err)
+		}
+		defer hr.Body.Close()
+		var body map[string]any
+		json.NewDecoder(hr.Body).Decode(&body)
+		return body
+	}
+	newSvc := func() *service.Service {
+		svc := service.New()
+		svc.Templates = reg
+		svc.Backend = stubBackend{}
+		svc.Cap = service.NewCap(1000)
+		svc.Journal = j
+		return svc
+	}
+
+	off := health(newSvc())
+	if _, present := off["training"]; present {
+		t.Errorf("with no training log configured, /healthz mentions one: %v", off)
+	}
+
+	svc := newSvc()
+	tl, err := traininglog.Open(filepath.Join(dir, "training"))
+	if err != nil {
+		t.Fatalf("traininglog.Open: %v", err)
+	}
+	tl.Close() // every Put now fails
+	svc.Training = tl
+	on := health(svc)
+	counts, ok := on["training"].(map[string]any)
+	if !ok {
+		t.Fatalf("expected a training object in /healthz with the log on, got %v", on)
+	}
+	if failed, _ := counts["write_failed"].(float64); failed != 1 {
+		t.Errorf("expected training.write_failed=1, got %v", counts["write_failed"])
+	}
 }
