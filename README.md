@@ -396,7 +396,7 @@ is unpriced, never a hardcoded number.
 Built and tested against an `httptest` fake replaying the wire shape documented at
 docs.typesafe.ai/api and /introduction/quickstart, pinned verbatim in
 `internal/backend/testdata/jev_example_response.json` (read 2026-09-25 by the
-session model), and since 2026-09-30 run against the live API once.
+session model), and since 2026-09-30 run against the live API: once by hand, then on a 434-question benchmark.
 
 **Measured live, 2026-09-30**, on a development Mac, typryx built at `fab8545`,
 `TYPRYX_BACKEND=jev` with the default `TYPRYX_JEV_URL` and `TYPRYX_JEV_MODEL`
@@ -417,6 +417,29 @@ appeared in the server log, the journal, or the ledger. One run of eight
 hand-written cases, from one network: evidence the wire mapping and the refusal
 path work against the real service, not a measurement of Jev's accuracy,
 calibration, or latency in general. See NOT PROVEN.
+
+**Measured on a benchmark, 2026-09-30.** The frozen test split of
+[typryx-evalset](https://github.com/TAIPANBOX/typryx-evalset) (434 synthetic questions
+in six families, sha256 `bd5f3cf4...`), asked one at a time through typryx `15ee54d`
+from a development laptop, every answer served by `jev-1.13.0`:
+
+| Measure | Result |
+|---|---|
+| answered | 434 of 434, no `unanswered`, no runner or HTTP errors |
+| accuracy | 87.1% (Wilson 95%: 83.6 to 89.9) |
+| calibration | ECE 0.042, Brier 0.183 |
+| latency (typryx `latency_ms`) | p50 229 ms, p95 276 ms (at the caller: 247 / 311 ms) |
+| held back | 92 distractor fields, one per row that carried one |
+| cost | USD 0.0082 for all 434, USD 0.019 per 1,000, computed from Jev's reported input tokens at the configured USD 0.042 per million |
+
+By family, accuracy with its 95% interval: `action.risk_class` 100.0 (94.7 to 100),
+`console.question_topic` 100.0 (94.7 to 100), `request.complexity` 98.6 (92.4 to
+99.8), `triage.anomaly_class` 87.0 (77.7 to 92.8), `eval.outcome_met` 69.9 (58.6 to
+79.2, ECE 0.165), `eval.answer_quality` 69.3 (58.2 to 78.6, ECE 0.153). The families
+where an answer is recognised and the two where work has to be checked separate
+clearly; on the checking pair Jev was also less well calibrated (on `eval.outcome_met`
+about 0.82 confident on average against 0.70 right). The same run's local and no-model
+rows are in typryx-evalset's README.
 
 ## Calibration
 
@@ -803,8 +826,8 @@ from the environment value itself and never logged; see [Jev backend](#jev-backe
 - **No model training, and no model shipped.** typryx keeps the data loop and the
   measurement; fine-tuning happens on the customer's own hardware, with their own tools.
 - **No claim about a vendor model's speed, cost, or accuracy** beyond what a dated
-  run in this repository recorded. Jev (TypeSafe AI) has been run live once (eight
-  asks, 2026-09-30); its published price and availability are vendor figures, quoted
+  run in this repository recorded. Jev (TypeSafe AI) has been run live twice on 2026-09-30 (eight
+  hand-written asks, then the 434-question benchmark); its published price and availability are vendor figures, quoted
   as vendor figures or not at all.
 
 ## What is checked, and how
@@ -914,12 +937,16 @@ repository, and is now covered.
   `agent_id=agent://demo.example/tester`, exactly what the ask carried. One run, one
   model, one gateway build; not a claim about any other environment or about
   tokenfuse's own behavior changing over time.
-- **The jev backend has made one live run, not a sustained one.** Eight hand-written
-  asks and one wrong-key ask on 2026-09-30 (see [Jev backend](#jev-backend)). Never
-  exercised live: the `429`/`529` retry path, a state near `max_state_bytes`, a
-  `422` validation failure, a `score` template with more than four levels, or any
-  volume beyond eight asks. Jev's accuracy and calibration on typryx's own questions
-  are unmeasured; eight obvious cases say nothing about either.
+- **The jev backend has been measured on one benchmark, from one laptop, not under
+  sustained load.** Eight hand-written asks and one wrong-key ask on 2026-09-30 (see
+  [Jev backend](#jev-backend)), then the frozen 434-question test split of
+  [typryx-evalset](https://github.com/TAIPANBOX/typryx-evalset) the same day, one ask
+  at a time. Never exercised live: the `429`/`529` retry path, a state near
+  `max_state_bytes`, a `422` validation failure, a `score` template with more than
+  four levels, concurrent asks, or any volume beyond those 434. The accuracy and
+  calibration figures in [Jev backend](#jev-backend) hold for that synthetic set, not
+  for any customer's own questions; per-family figures rest on about 70 questions
+  each.
 - **Jev's rate limits, maximum state size, and maximum questions per call are
   undocumented by the vendor.** Nothing here can measure a bound the vendor has not
   published; `retryDelay`'s 2-second cap is this repository's own choice, not a
@@ -932,10 +959,13 @@ repository, and is now covered.
   typryx's own `TYPRYX_KEYS` mapping, one credential at a time, not a general identity
   channel from the broker, and an operator who wants a distinct agent per caller has to
   provision a distinct credential and `TOKENFUSE_MCP_SECRET_SCOPES` rule per one.
-- **The launchers install it only when asked, on the `stub` backend.** stack-single
-  (`WITH_TYPED=1`) and stack-up (`--with-typed`) were run with it on one development Mac;
-  stack-k8s (`deploy.sh --with-typed`) is validated client-side only, no cluster was
-  created for it. None sends typryx's journal to the shared event bus yet.
+- **The launchers install it only when asked, and the data modes are run on one Mac
+  only.** `TYPED_MODE=jev|own-model|off` (stack-single v1.1.16) and `--typed-mode`
+  (stack-k8s v1.1.22, stack-up from `main`) default to `off`; `--with-typed` alone
+  still gives the `stub` backend. stack-single's `own-model` mode was run through
+  compose against a local `qwen2.5:7b` on 2026-09-30; its `jev` mode, a full
+  `install.sh` on Debian in any typed mode, and stack-k8s's modes on a cluster
+  (validated client-side only) have not been run.
 - **No fine-tune has been run end to end from an export by this project.** The loop up to
   the export is proved by tests and by the built binary (ask, truth, training log, export,
   on the `stub` backend); nothing here has trained a model on an exported file, served
@@ -967,7 +997,8 @@ repository, and is now covered.
 - [x] **Phase E**: calibration (`typryx calibration`), measured against `stub`,
       `qwen2.5:3b`, and `qwen2.5:7b`; see [Calibration](#calibration).
 - [x] **Phase D**: the `jev` backend is built, tested against a replayed wire shape,
-      and run live once on 2026-09-30 over all four example templates. See
+      run live on 2026-09-30 over all four example templates, and measured the
+      same day on typryx-evalset's 434-question test split. See
       [Jev backend](#jev-backend).
 - [x] **Phase F**: the four event types are registered in agent-passport's SPEC 6.2.
 - [x] **Phase G**: opt-in launcher wiring (stack-single, stack-up, stack-k8s) and a
@@ -980,10 +1011,13 @@ repository, and is now covered.
       `typryx export --training`, so a customer can tune a model of their own; no
       fine-tune has been run from it yet. See [Your own
       model](#your-own-model-trained-on-your-own-questions).
-- [ ] **Phase I**: a judge bake-off with a live Jev, prepared in verdryx's
+- [x] **Benchmark**: Jev, a local `qwen2.5:7b` and a fixed default measured on the
+      frozen 434-question test split of typryx-evalset on 2026-09-30; see
+      [Jev backend](#jev-backend).
+- [ ] **Phase I**: verdryx's judge bake-off with a live Jev, prepared in its
       `examples/bakeoff`; a key and a spend decision exist since 2026-09-30, the
       bake-off itself has not been run.
 - [ ] **Deeper consumers** (wardryx, tokenfuse's router, costcrew, engram), only if
       phase I shows they are worth it.
 
-Next: the live Jev run, which needs a spend decision first.
+Next: verdryx's judge bake-off (phase I) against the live Jev.
