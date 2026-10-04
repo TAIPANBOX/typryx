@@ -649,6 +649,16 @@ reported as that run's failure and blocks nothing else. Each new link proves
 both halves in its own suite: unchanged behaviour without typryx, and typryx
 off, slow or failing does not break the consumer.
 
+@decided 2026-10-04: wardryx is typryx's first consumer on the policy plane. It
+may ask `action.risk_class` (the template invariant 39 pins) for a pending tool
+call and turn the answer into a typed signal that can add a hold and nothing
+else, never a deny. This narrows rule (1) above for wardryx alone: wardryx
+names typryx in its signal enrichment, in the form rule (3) allows (off by
+default, a short timeout of its own, and a typryx that is slow, refusing or down
+is no signal and the call is decided as if typryx were absent). tokenfuse still
+names typryx in no file. estate-gates C22 holds rule (1) and has to be told
+about this exception by whoever changes wardryx's side.
+
 ### Not built yet
 
 - **`jev`** (phase D) is built: `TYPRYX_BACKEND=jev` starts and makes real
