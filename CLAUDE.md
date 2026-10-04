@@ -586,7 +586,8 @@ in the plan.
 
 39. **The `action.risk_class` starter template is the question the
     evaluation set measured, word for word.** A consumer that builds a risk
-    signal on this template (wardryx's `hold_if_signal`) is only as good as
+    signal on this template (for example the one `typryx wardryx-proxy` hands
+    wardryx's `hold_if_signal`) is only as good as
     typryx-evalset's family 5 measurement if the template that runs is the
     template that was measured, so `examples/templates/action.risk_class.json`
     pins the type (choice), the instructions, the three fields (`tool`,
@@ -649,15 +650,15 @@ reported as that run's failure and blocks nothing else. Each new link proves
 both halves in its own suite: unchanged behaviour without typryx, and typryx
 off, slow or failing does not break the consumer.
 
-@decided 2026-10-04: wardryx is typryx's first consumer on the policy plane. It
-may ask `action.risk_class` (the template invariant 39 pins) for a pending tool
-call and turn the answer into a typed signal that can add a hold and nothing
-else, never a deny. This narrows rule (1) above for wardryx alone: wardryx
-names typryx in its signal enrichment, in the form rule (3) allows (off by
-default, a short timeout of its own, and a typryx that is slow, refusing or down
-is no signal and the call is decided as if typryx were absent). tokenfuse still
-names typryx in no file. estate-gates C22 holds rule (1) and has to be told
-about this exception by whoever changes wardryx's side.
+@decided 2026-10-04: wardryx is the first consumer of a typed answer from typryx.
+A risk signal may add a hold, never a deny, and is recorded so a replay
+reproduces the decision.
+
+@claude 2026-10-04, delegated by the owner: rule (1) above is NOT narrowed.
+wardryx stays generic (it reads `signals` and `hold_if_signal` and names typryx
+in no file), and typryx reaches it through its own `wardryx-proxy`, placed in
+front of wardryx by configuration, so estate-gates C22 needs no exception and a
+customer without typryx runs the identical wardryx.
 
 ### Not built yet
 
