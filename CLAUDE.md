@@ -584,6 +584,23 @@ in the plan.
     two truths taken, wrong-shaped truth accepted, torn tail truncated by the
     export, `--out` allowed inside an input, each caught)*
 
+39. **The `action.risk_class` starter template is the question the
+    evaluation set measured, word for word.** A consumer that builds a risk
+    signal on this template (wardryx's `hold_if_signal`) is only as good as
+    typryx-evalset's family 5 measurement if the template that runs is the
+    template that was measured, so `examples/templates/action.risk_class.json`
+    pins the type (choice), the instructions, the three fields (`tool`,
+    `arguments`, `target`, so a tool call's nested arguments object passes
+    through as the object it was and everything else is held back), exactly the
+    five options (`read_only`, `reversible_change`, `destructive`,
+    `external_send`, `financial`) with their criteria text, and 16384 bytes.
+    Changing any word means re-measuring, not editing. *(test:
+    `TestTheRiskClassTemplateIsTheOneTheEvalsetMeasured`,
+    `TestTheRiskClassTemplateSendsToolArgumentsAndTargetAndNothingElse` in
+    `internal/template`, both run red first against a catalog without the
+    file; three mutants each caught: a criterion reworded, `arguments` dropped
+    from `fields`, an option renamed)*
+
 @decided 2026-09-30: a customer chooses one of three data modes for typed
 answers (a hosted Jev, their own model on their own hardware, or off). typryx
 does not train or ship models. It offers an opt-in local training log, off by
