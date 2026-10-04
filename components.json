@@ -22,6 +22,10 @@
         "health_path": "/healthz",
         "env": {
           "TYPRYX_ADDR": { "required": false },
+          "TYPRYX_PROXY_ADDR": { "required": false },
+          "TYPRYX_PROXY_UPSTREAM": { "required": false },
+          "TYPRYX_PROXY_ASK_TIMEOUT_MS": { "required": false },
+          "TYPRYX_PROXY_TEMPLATE": { "required": false },
           "TYPRYX_KEYS": { "required": false },
           "TYPRYX_ALLOW_OPEN_BIND": { "required": false },
           "TYPRYX_BACKEND": { "required": true },

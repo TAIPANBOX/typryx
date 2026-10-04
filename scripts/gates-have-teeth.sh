@@ -121,6 +121,18 @@ fault "one-way-out: a net.Dial planted in internal/service" \
 var _ = net.Dial' \
   fail ./scripts/one-way-out.sh
 
+fault "one-way-out: an http.Client{} planted in internal/wardryxproxy, the named exception, must not fire" \
+  internal/wardryxproxy/proxy.go 'func New(c Config) *Proxy {' 'var leakedInProxy = http.Client{}
+
+func New(c Config) *Proxy {' \
+  pass ./scripts/one-way-out.sh
+
+fault "one-way-out: an http.Client{} planted in internal/wardryxproxy's neighbour, internal/door, still fires" \
+  internal/door/door.go 'package door' 'package door
+
+var leakedInDoor = http.Client{}' \
+  fail ./scripts/one-way-out.sh
+
 fault "one-way-out: an http.Client{} planted in examples/calibration, exempted, must not fire" \
   examples/calibration/main.go 'func main() {' 'var leakedInExample = http.Client{}
 
