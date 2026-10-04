@@ -481,3 +481,71 @@ Feature: Typed answers, as an option a customer adds to the stack
     When it is asked about a call whose state also carries a credential and an email address
     Then the backend receives the tool, the arguments as the object they were, and the target
     And the credential and the email address are held back and counted
+
+  # @test:TestEveryOtherRouteIsForwardedByteForByte
+  Scenario: The proxy in front of wardryx changes nothing it does not have to
+    Given typryx's wardryx-proxy in front of wardryx
+    When any request other than a decide with a tool call passes through it
+    Then wardryx receives the same method, path, query, headers and body, and the caller receives wardryx's response untouched
+
+  # @test:TestADecideWithoutAToolCallIsForwardedUntouched
+  Scenario: A decide request with no tool call is not looked at twice
+    Given a decide request whose body has no tool call
+    When it passes through the proxy
+    Then wardryx receives exactly the bytes the caller sent, and typryx is never asked
+
+  # @test:TestADecideWithAToolCallGetsTheSignalAppended
+  Scenario: A tool call gets a risk signal on its way to wardryx
+    Given a decide request carrying a tool call, and a typryx that answers in time
+    When it passes through the proxy
+    Then wardryx receives the same request with one more signal, naming the risk class, its probability, typryx as the source and the answer id
+    And typryx was asked only the tool, the arguments and the target
+
+  # @test:TestAnythingButACleanAnswerLeavesTheBodyUntouched
+  Scenario: No answer from typryx means no change to the request
+    Given a backend that fails, answers nothing, outlasts the ask timeout, has spent its cap, or is sent more than the template allows
+    When a decide request with a tool call passes through the proxy
+    Then wardryx receives exactly the bytes the caller sent
+
+  # @test:TestTruncatedArgumentsAreNeverAskedAbout
+  Scenario: A call whose arguments were cut off is never classified from its name
+    Given a tool call marked as having truncated arguments
+    When it passes through the proxy
+    Then typryx is not asked and wardryx receives the request untouched
+
+  # @test:TestMutatedBodiesNeverComeOutAsAnythingButTheOriginalOrOneMoreSignal
+  Scenario: Hostile bodies come out as they went in, or with one more signal
+    Given two hundred seeded mutations of a valid decide body
+    When each passes through the proxy
+    Then wardryx receives either the original bytes or the same object with exactly one more signal, and nothing crashes
+
+  # @test:TestAuthorizationIsForwardedAndNeverLoggedOrRecorded
+  Scenario: The caller's wardryx credential passes through and is never kept
+    Given a request carrying a wardryx Authorization header and typryx's own credential
+    When it passes through the proxy
+    Then wardryx receives the Authorization header and never typryx's credential
+    And neither a credential nor the tool arguments reach the log or the journal
+
+  # @test:TestWardryxBeingDownIsA502NotAnAnswer
+  Scenario: A wardryx that cannot be reached is a 502, so the caller's own fail mode decides
+    Given a wardryx that is down
+    When any request passes through the proxy
+    Then the caller receives a 502 that does not name the upstream
+
+  # @test:TestTheProxyRefusesAWideBindWithNoCredentialLikeTheServiceDoes
+  Scenario: The proxy is as hard to open by accident as the service
+    Given the proxy told to bind a non-loopback address with no credential configured
+    When it is started
+    Then it refuses, unless a credential is configured or the operator said so by name
+
+  # @test:TestAnUnusableProxySettingRefusesToStartNamingTheVariable
+  Scenario: An unusable proxy setting stops it and names the variable
+    Given no upstream, a malformed one, a timeout outside its bounds, or a template that is not a choice over tool, arguments and target
+    When the proxy is started
+    Then it refuses and names the variable
+
+  # @test:TestTheProxyRunsAsARealProcessAndSignsADecide
+  Scenario: The built binary does all of this as a process
+    Given typryx wardryx-proxy started with the stub backend in front of a stand-in for wardryx
+    When a decide request with a tool call and a health check pass through it
+    Then the decide request arrives with a signal, the health check untouched, and neither the credential nor the arguments are in the output or the journal

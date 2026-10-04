@@ -13,7 +13,7 @@ and recorded.
 ![Go 1.27](https://img.shields.io/badge/Go-1.27-4493f8)
 ![one direct dependency](https://img.shields.io/badge/direct%20dependency-one-2dd4bf)
 ![license Apache 2.0](https://img.shields.io/badge/license-Apache--2.0-9aa7b8)
-![tests](https://img.shields.io/badge/tests-948-brightgreen)
+![tests](https://img.shields.io/badge/tests-986-brightgreen)
 
 </div>
 
@@ -261,6 +261,64 @@ deployment.
 
 **stack-single, stack-up, and stack-k8s** carry no typryx entry yet; see
 [Status](#status).
+
+## Connect it to Wardryx
+
+`typryx wardryx-proxy` is a small reverse proxy that sits between a caller and
+[wardryx](https://github.com/TAIPANBOX/wardryx), and is how a risk signal reaches wardryx's
+`hold_if_signal` rule without wardryx knowing typryx exists. Wardryx stays generic: it reads
+`signals` on `/v1/decide` and nothing else about where they come from, so a deployment without
+this proxy runs the identical wardryx and `hold_if_signal` simply never fires.
+
+```
+tokenfuse MCP broker  ->  typryx wardryx-proxy  ->  wardryx
+                              |
+                              +-- asks typryx's own service, in-process (action.risk_class)
+```
+
+It forwards every request to wardryx unchanged: method, path, query, headers (the
+`Authorization` header included) and body, and the response comes back untouched. The one
+exception is `POST /v1/decide` whose JSON body carries a `tool_call` with a `name` and whose
+`arguments_truncated` is not true. For that, typryx is asked, in the proxy's own process and
+through the same service layer `typryx serve` runs (so the template's egress filter, the
+hourly and daily caps, the ledger and the journal all apply), what risk class the call is,
+from `tool`, `arguments` and `target` only. If it answers in time with a valid choice, one
+signal `{name: "action.risk_class", value, probability, source: "typryx", answer_id}` is
+appended to the request's `signals` and the modified body is forwarded. An error, a timeout,
+`unanswered`, a refusal or a cap forwards the original bytes untouched. A call whose arguments
+were truncated is never asked about: classifying a tool name alone would be a guess dressed as
+an answer. Wardryx can turn a signal into a hold and into nothing else, so a signal that is
+wrong, or missing, costs a person a delay and cannot cost anything else.
+
+Point the caller at the proxy instead of wardryx. For tokenfuse that is the variable its
+wardryx client reads (`TOKENFUSE_WARDRYX_URL`, in `crates/gateway/src/wardryx.rs`); keep
+`TOKENFUSE_WARDRYX_KEY` as it is, since the bearer is forwarded to wardryx as received. If the
+proxy cannot reach wardryx it answers 502, and tokenfuse's own `TOKENFUSE_WARDRYX_FAILMODE`
+decides what that means (`closed` refuses the call). Requests that carry no `tool_call` (the
+per-model-call decisions) are forwarded as they are and cost nothing extra.
+
+```sh
+TYPRYX_BACKEND=jev TYPRYX_JEV_KEY_FILE=/run/secrets/jev \
+TYPRYX_TEMPLATES=/etc/typryx/templates \
+TYPRYX_PROXY_UPSTREAM=http://wardryx:8090 \
+typryx wardryx-proxy          # listens on 127.0.0.1:4330
+```
+
+The proxy's own settings are `TYPRYX_PROXY_ADDR` (loopback by default; a non-loopback bind with
+no `TYPRYX_KEYS` is refused unless `TYPRYX_ALLOW_OPEN_BIND=1`, as for the service),
+`TYPRYX_PROXY_UPSTREAM` (required), `TYPRYX_PROXY_ASK_TIMEOUT_MS` (default 150, the most a slow
+typryx may add to a decision) and `TYPRYX_PROXY_TEMPLATE` (default `action.risk_class`). Every
+other `TYPRYX_*` variable means what it means for `typryx serve`, including the backend, the
+caps and `TYPRYX_EVENTS`. With `TYPRYX_KEYS` set the proxy requires an `X-Typryx-Key` header
+on every request and never forwards it; the journal's agent comes from that credential, as
+always, so without keys the asks are answered but not journaled under an agent. The journal
+records each ask the way it records any answer: the answer id and a SHA-384 of what was sent,
+never the arguments, and the `Authorization` header is never logged or recorded.
+
+What a paid backend costs: every eligible decide request is one ask, because the proxy cannot
+know which policies read the signal. Keep the hourly cap (`TYPRYX_MAX_CALLS_PER_HOUR`, default
+1000) and set `TYPRYX_MAX_USD_PER_DAY` when the backend is priced; a spent cap simply stops
+signals being added.
 
 ## How an answer is made
 
@@ -789,6 +847,10 @@ triage.anomaly_class 6b4497aec4a78b57c2b0e0b0481faa07e34eb0b7aa8297d45c6f12f4d12
 | `TYPRYX_ALLOW_FREEFORM` | no | unset | only `1`/`true` count |
 | `TYPRYX_ACCEPT_KEY_IN_META` | no | unset | only `1`/`true` count; lets a `POST /mcp` `tools/call` with no `X-Typryx-Key` header read its credential from `params._meta["typryx/key"]` instead; see [Connect it](#connect-it) |
 | `TYPRYX_TIMEOUT_MS` | no | `2000` | backend deadline |
+| `TYPRYX_PROXY_ADDR` | no | `127.0.0.1:4330` | listen address of `typryx wardryx-proxy` only; same open-bind rule as `TYPRYX_ADDR`; see [Connect it to Wardryx](#connect-it-to-wardryx) |
+| `TYPRYX_PROXY_UPSTREAM` | for `wardryx-proxy` | none | wardryx's base URL; absolute http/https, no userinfo, query or fragment |
+| `TYPRYX_PROXY_ASK_TIMEOUT_MS` | no | `150` | the deadline for one ask made by the proxy, 1 to 5000 |
+| `TYPRYX_PROXY_TEMPLATE` | no | `action.risk_class` | the template the proxy asks; a choice template whose fields are only `tool`, `arguments` and `target` |
 | `TYPRYX_OPENAI_URL` | when `TYPRYX_BACKEND=openai-logprobs` | none | an OpenAI-compatible base URL ending in `/v1` (e.g. `http://127.0.0.1:11434/v1` for a local Ollama); must be absolute http/https with a host and no userinfo, query, or fragment |
 | `TYPRYX_OPENAI_MODEL` | when `TYPRYX_BACKEND=openai-logprobs` | none | the model name sent with every request |
 | `TYPRYX_OPENAI_KEY_FILE` | no | none = no `Authorization` header | path to a file holding a bearer key, trimmed; never read from the environment value itself, never logged, never echoed into an error |
@@ -862,7 +924,7 @@ go build ./...
 ./scripts/gates-have-teeth.sh
 ```
 
-411 tests. `go test ./... -race` covers every package; `internal/manifest` builds and
+433 tests. `go test ./... -race` covers every package; `internal/manifest` builds and
 starts the real binary to prove `components.json` against what it actually does; CI's
 `image` job builds the Dockerfile on every push and pull request, pushing nowhere.
 
@@ -913,6 +975,16 @@ above, was found afterward by a real MCP client rather than by any test in this
 repository, and is now covered.
 
 ## NOT PROVEN
+
+- **`typryx wardryx-proxy` has run against stand-ins only.** Its tests put it in front of a
+  fake upstream and use the `stub` backend or a controllable fake, and the built binary was run
+  once the same way (a stand-in upstream, the stub backend, loopback). It has not been run in
+  front of a real wardryx, behind a real tokenfuse MCP broker, or with a real Jev; no live
+  model call was made for it. The caller side (tokenfuse sending `tool_call` with `name`,
+  `arguments`, `target` and `arguments_truncated`, and reading `TOKENFUSE_WARDRYX_URL`) is taken
+  from tokenfuse's source and its change that sends the tool call, not run here. A slow typryx
+  still costs each eligible decision up to the ask timeout; there is no circuit breaker. The
+  proxy cannot know which policies read the signal, so every eligible decide request is one ask.
 
 - **`stub` answers mean nothing about any real question.** It is deterministic and free,
   for tests and demos only.

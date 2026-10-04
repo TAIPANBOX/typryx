@@ -6,9 +6,13 @@
 package manifest
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
+	"io"
 	"net"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -721,5 +725,164 @@ func TestConnectGoNeverReadsAnEnvironmentVariable(t *testing.T) {
 	}
 	if strings.Contains(string(b), "os.Getenv") {
 		t.Fatalf("%s now calls os.Getenv; remove its exemption from TestTheManifestMatchesWhatTheBinaryReads and declare whatever it reads in components.json", path)
+	}
+}
+
+// --- typryx wardryx-proxy, as a real process ---
+
+// runProxy starts `typryx wardryx-proxy` and returns its address once it
+// answers, with a stop function. It fails the test if the process exits first.
+func runProxy(t *testing.T, bin string, env []string) (addr string, out *syncBuffer, stop func()) {
+	t.Helper()
+	port := freePort(t)
+	cmd := exec.Command(bin, "wardryx-proxy")
+	cmd.Env = append(append([]string{}, env...), "TYPRYX_PROXY_ADDR=127.0.0.1:"+port)
+	out = &syncBuffer{}
+	cmd.Stdout, cmd.Stderr = out, out
+	if err := cmd.Start(); err != nil {
+		t.Fatalf("starting the proxy: %v", err)
+	}
+	done := make(chan struct{})
+	go func() { _ = cmd.Wait(); close(done) }()
+	stop = func() { _ = cmd.Process.Kill(); <-done }
+	t.Cleanup(stop)
+	addr = "127.0.0.1:" + port
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		select {
+		case <-done:
+			t.Fatalf("the proxy exited before it listened:\n%s", out.String())
+		default:
+		}
+		if c, err := net.DialTimeout("tcp", addr, 100*time.Millisecond); err == nil {
+			_ = c.Close()
+			return addr, out, stop
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+	t.Fatalf("the proxy never listened:\n%s", out.String())
+	return
+}
+
+// TestTheProxyRunsAsARealProcessAndSignsADecide is the end to end claim: the
+// built binary, started as `typryx wardryx-proxy` with the stub backend,
+// forwards a decide request to an upstream standing in for wardryx with one
+// signal added, forwards a health check untouched, and never shows the
+// upstream its own credential or the tool arguments in its journal.
+func TestTheProxyRunsAsARealProcessAndSignsADecide(t *testing.T) {
+	if testing.Short() {
+		t.Skip("starts a process")
+	}
+	_, r := load(t)
+	bin := build(t, r, "./cmd/typryx")
+
+	var mu sync.Mutex
+	var bodies [][]byte
+	var auth []string
+	up := http.NewServeMux()
+	up.HandleFunc("/", func(w http.ResponseWriter, req *http.Request) {
+		b, _ := io.ReadAll(req.Body)
+		mu.Lock()
+		bodies = append(bodies, b)
+		auth = append(auth, req.Header.Get("Authorization"))
+		mu.Unlock()
+		w.WriteHeader(http.StatusForbidden)
+		_, _ = io.WriteString(w, "wardryx says no")
+	})
+	us := httptest.NewServer(up)
+	defer us.Close()
+
+	journal := filepath.Join(t.TempDir(), "events.ndjson")
+	addr, out, _ := runProxy(t, bin, []string{
+		"TYPRYX_BACKEND=stub",
+		"TYPRYX_TEMPLATES=" + filepath.Join(r, "examples", "templates"),
+		"TYPRYX_PROXY_UPSTREAM=" + us.URL,
+		"TYPRYX_KEYS=k-proxy=agent://demo.example/proxy",
+		"TYPRYX_EVENTS=" + journal,
+	})
+	post := func(path string, body string) (int, string) {
+		req, _ := http.NewRequest("POST", "http://"+addr+path, strings.NewReader(body))
+		req.Header.Set("Authorization", "Bearer LIVE-WARDRYX-KEY")
+		req.Header.Set("X-Typryx-Key", "k-proxy")
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			t.Fatalf("POST %s: %v", path, err)
+		}
+		defer resp.Body.Close()
+		b, _ := io.ReadAll(resp.Body)
+		return resp.StatusCode, string(b)
+	}
+	code, got := post("/v1/decide", `{"agent_id":"agent://a/b","run_id":"r","tool_call":{"name":"s3.delete_object","arguments":{"key":"LIVE-ARG-MARKER"},"target":"s3://b"}}`)
+	if code != 403 || got != "wardryx says no" {
+		t.Fatalf("the response was altered: %d %q", code, got)
+	}
+	code, got = post("/v1/status", `plain`)
+	if code != 403 || got != "wardryx says no" {
+		t.Fatalf("a pass-through route was altered: %d %q", code, got)
+	}
+
+	mu.Lock()
+	defer mu.Unlock()
+	if len(bodies) != 2 {
+		t.Fatalf("the upstream saw %d requests, want 2", len(bodies))
+	}
+	var sent struct {
+		Signals []map[string]any `json:"signals"`
+	}
+	if err := json.Unmarshal(bodies[0], &sent); err != nil || len(sent.Signals) != 1 {
+		t.Fatalf("the decide body the upstream got: %s", bodies[0])
+	}
+	if s := sent.Signals[0]; s["name"] != "action.risk_class" || s["source"] != "typryx" || s["answer_id"] == "" {
+		t.Fatalf("the signal: %#v", s)
+	}
+	if string(bodies[1]) != "plain" {
+		t.Fatalf("a non-decide body was changed: %q", bodies[1])
+	}
+	for _, a := range auth {
+		if a != "Bearer LIVE-WARDRYX-KEY" {
+			t.Fatalf("Authorization was not forwarded unchanged: %q", a)
+		}
+	}
+	raw, _ := os.ReadFile(journal)
+	for name, text := range map[string]string{"output": out.String(), "journal": string(raw)} {
+		if strings.Contains(text, "LIVE-WARDRYX-KEY") || strings.Contains(text, "LIVE-ARG-MARKER") || strings.Contains(text, "k-proxy") {
+			t.Errorf("a credential or the arguments reached the %s:\n%s", name, text)
+		}
+	}
+	if !strings.Contains(string(raw), "typed_answer") {
+		t.Errorf("the ask is not on the record:\n%s", raw)
+	}
+}
+
+// TestTheProxyRefusesToStartWithoutAnUpstreamOrOnAWideOpenBind: the two
+// refusals a real process must show, exit 2 naming the variable and exit 1
+// for the open bind, the same codes the service uses.
+func TestTheProxyRefusesToStartWithoutAnUpstreamOrOnAWideOpenBind(t *testing.T) {
+	if testing.Short() {
+		t.Skip("starts processes")
+	}
+	_, r := load(t)
+	bin := build(t, r, "./cmd/typryx")
+	tpl := filepath.Join(r, "examples", "templates")
+	run := func(extra ...string) (int, string) {
+		ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+		defer cancel()
+		cmd := exec.CommandContext(ctx, bin, "wardryx-proxy")
+		cmd.Env = append([]string{"TYPRYX_BACKEND=stub", "TYPRYX_TEMPLATES=" + tpl}, extra...)
+		out, err := cmd.CombinedOutput()
+		if ctx.Err() != nil {
+			t.Fatalf("it kept running, want a refusal:\n%s", out)
+		}
+		var exit *exec.ExitError
+		if errors.As(err, &exit) {
+			return exit.ExitCode(), string(out)
+		}
+		return 0, string(out)
+	}
+	if code, out := run(); code != 2 || !strings.Contains(out, "TYPRYX_PROXY_UPSTREAM") {
+		t.Errorf("no upstream: exit %d, output %q; want exit 2 naming TYPRYX_PROXY_UPSTREAM", code, out)
+	}
+	if code, out := run("TYPRYX_PROXY_UPSTREAM=http://127.0.0.1:1", "TYPRYX_PROXY_ADDR=0.0.0.0:"+freePort(t)); code != 1 || !strings.Contains(out, "TYPRYX_KEYS") {
+		t.Errorf("a wide bind with no credential: exit %d, output %q; want exit 1 naming TYPRYX_KEYS", code, out)
 	}
 }

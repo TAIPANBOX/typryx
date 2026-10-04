@@ -69,8 +69,20 @@ func main() {
 	if len(args) >= 1 && args[0] == "export" {
 		os.Exit(exportCmd(args[1:], os.Stdout, os.Stderr))
 	}
+	if len(args) >= 1 && args[0] == "wardryx-proxy" {
+		if err := runWardryxProxy(log); err != nil {
+			var cfg *configError
+			if errors.As(err, &cfg) {
+				fmt.Fprintln(os.Stderr, "typryx: "+err.Error())
+				os.Exit(2)
+			}
+			fmt.Fprintln(os.Stderr, "typryx: "+err.Error())
+			os.Exit(1)
+		}
+		os.Exit(0)
+	}
 	if len(args) >= 1 && args[0] != "serve" {
-		fmt.Fprintf(os.Stderr, "typryx: unknown subcommand %q. Known: serve (the default), templates check <dir>, connect <target>, calibration, export --training\n", args[0])
+		fmt.Fprintf(os.Stderr, "typryx: unknown subcommand %q. Known: serve (the default), wardryx-proxy, templates check <dir>, connect <target>, calibration, export --training\n", args[0])
 		os.Exit(2)
 	}
 
@@ -347,6 +359,16 @@ func loadOpenAIConfig() (*openaiBackendConfig, error) {
 // numeric variables, then the open-bind refusal last, once the rest of the
 // configuration is already known to be sane.
 func loadConfig() (*config, error) {
+	return loadConfigAt("TYPRYX_ADDR", defaultAddr, door.RefuseOpenBind)
+}
+
+// loadConfigAt is loadConfig for a surface with its own listen address: the
+// HTTP/MCP service reads TYPRYX_ADDR, and `typryx wardryx-proxy` reads
+// TYPRYX_PROXY_ADDR, but both are the same typryx underneath (the same
+// backend, templates, caps, journal and credentials), validated in the same
+// order, with the open-bind refusal last. refuse says what a wide bind with no
+// credential is refused with, since that message names the variable.
+func loadConfigAt(addrVar, addrDefault string, refuse func(addr string, keys door.Keys, allowOpenBind bool) string) (*config, error) {
 	backendName := os.Getenv("TYPRYX_BACKEND")
 	if backendName == "" {
 		return nil, missingVar("TYPRYX_BACKEND", "there is no default backend, on purpose: a paid backend must always be a named choice. Set TYPRYX_BACKEND=stub for this build.")
@@ -432,7 +454,7 @@ func loadConfig() (*config, error) {
 				"or unset TYPRYX_MAX_USD_PER_DAY.", strconv.FormatFloat(*maxUsdPerDay, 'g', -1, 64), backendName)}
 	}
 
-	addr := envOr("TYPRYX_ADDR", defaultAddr)
+	addr := envOr(addrVar, addrDefault)
 	keys := door.ParseKeys(os.Getenv("TYPRYX_KEYS"))
 	// A credential bound to anything that is not a well-formed agent://
 	// identity would have that value written as agent_id on every event and
@@ -454,7 +476,7 @@ func loadConfig() (*config, error) {
 	// whatever this flag says (internal/manifest proves that row).
 	acceptKeyInMeta := door.TruthyEnv(os.Getenv("TYPRYX_ACCEPT_KEY_IN_META"))
 
-	if why := door.RefuseOpenBind(addr, keys, allowOpenBind); why != "" {
+	if why := refuse(addr, keys, allowOpenBind); why != "" {
 		return nil, errors.New(why)
 	}
 
@@ -501,13 +523,45 @@ type runtime struct {
 // lets this be tested in-process: every wiring decision below the
 // config-validation layer is reachable from a test without a network.
 func buildRuntime(cfg *config, log *slog.Logger) (*runtime, error) {
+	svc, rt, err := buildService(cfg, log)
+	if err != nil {
+		return nil, err
+	}
+	mcpServer := &mcp.Server{Service: svc}
+	apiServer := &api.Server{Keys: cfg.keys, Service: svc, MCP: mcpServer, AcceptKeyInMeta: cfg.acceptKeyInMeta}
+
+	rt.server = &http.Server{
+		Addr:              cfg.addr,
+		Handler:           api.NewMux(apiServer),
+		ReadHeaderTimeout: 10 * time.Second,
+	}
+
+	log.Info("typryx listening",
+		"version", version, "addr", cfg.addr, "backend", cfg.backendName,
+		"templates", len(cfg.templates.List()), "credentials_required", cfg.keys.Configured(),
+		"journal", journalState(cfg.eventsPath),
+		"ledger", ledgerState(cfg.ledgerDir),
+		"training_log", trainingState(cfg.trainingDir),
+		"calls_per_hour", capState(cfg.maxCallsPerHour),
+		"usd_per_day", usdCapState(cfg.maxUsdPerDay),
+		"freeform", cfg.allowFreeform,
+		"accept_key_in_meta", cfg.acceptKeyInMeta)
+
+	return rt, nil
+}
+
+// buildService is the part of buildRuntime every surface shares: it opens the
+// journal, the ledger and the training log and wires the one service.Service,
+// with the backend, the caps and the deadline the configuration names. The
+// returned runtime holds what the caller must close and has no server yet.
+func buildService(cfg *config, log *slog.Logger) (*service.Service, *runtime, error) {
 	if cfg.maxCallsPerHour <= 0 {
 		log.Warn("this deployment has NO hourly call cap; TYPRYX_MAX_CALLS_PER_HOUR=0 disables it deliberately")
 	}
 
 	journal, err := record.Open(cfg.eventsPath)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 
 	var led *ledger.Ledger
@@ -515,7 +569,7 @@ func buildRuntime(cfg *config, log *slog.Logger) (*runtime, error) {
 		led, err = ledger.Open(cfg.ledgerDir)
 		if err != nil {
 			_ = journal.Close()
-			return nil, err
+			return nil, nil, err
 		}
 		if led.SkippedTornLines > 0 {
 			log.Warn("the ledger's answer log had a torn last line, skipped", "count", led.SkippedTornLines)
@@ -530,7 +584,7 @@ func buildRuntime(cfg *config, log *slog.Logger) (*runtime, error) {
 			if led != nil {
 				_ = led.Close()
 			}
-			return nil, err
+			return nil, nil, err
 		}
 		if trainLog.TornBytes() > 0 {
 			log.Warn("the training log had a torn last line, truncated", "bytes", trainLog.TornBytes())
@@ -589,27 +643,7 @@ func buildRuntime(cfg *config, log *slog.Logger) (*runtime, error) {
 	svc.Timeout = time.Duration(cfg.timeoutMS) * time.Millisecond
 	svc.AllowFreeform = cfg.allowFreeform
 
-	mcpServer := &mcp.Server{Service: svc}
-	apiServer := &api.Server{Keys: cfg.keys, Service: svc, MCP: mcpServer, AcceptKeyInMeta: cfg.acceptKeyInMeta}
-
-	srv := &http.Server{
-		Addr:              cfg.addr,
-		Handler:           api.NewMux(apiServer),
-		ReadHeaderTimeout: 10 * time.Second,
-	}
-
-	log.Info("typryx listening",
-		"version", version, "addr", cfg.addr, "backend", cfg.backendName,
-		"templates", len(cfg.templates.List()), "credentials_required", cfg.keys.Configured(),
-		"journal", journalState(cfg.eventsPath),
-		"ledger", ledgerState(cfg.ledgerDir),
-		"training_log", trainingState(cfg.trainingDir),
-		"calls_per_hour", capState(cfg.maxCallsPerHour),
-		"usd_per_day", usdCapState(cfg.maxUsdPerDay),
-		"freeform", cfg.allowFreeform,
-		"accept_key_in_meta", cfg.acceptKeyInMeta)
-
-	return &runtime{server: srv, journal: journal, ledger: led, training: trainLog}, nil
+	return svc, &runtime{journal: journal, ledger: led, training: trainLog}, nil
 }
 
 func run(log *slog.Logger) error {
@@ -623,6 +657,13 @@ func run(log *slog.Logger) error {
 	if err != nil {
 		return err
 	}
+	return serveRuntime(rt, log)
+}
+
+// serveRuntime listens until a signal or a listener failure, then shuts down
+// and closes what buildService opened. Both the service and the wardryx-proxy
+// run through it.
+func serveRuntime(rt *runtime, log *slog.Logger) error {
 	journal, led, srv := rt.journal, rt.ledger, rt.server
 	if rt.training != nil {
 		defer func() {
