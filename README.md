@@ -64,7 +64,7 @@ No claim here is about how fast, cheap, or accurate any vendor's model is; see
 With Go 1.27:
 
 ```sh
-go install github.com/TAIPANBOX/typryx/cmd/typryx@v0.3.0
+go install github.com/TAIPANBOX/typryx/cmd/typryx@v0.4.0
 ```
 
 Or from a clone, which also gives you the example templates:
@@ -81,8 +81,11 @@ digest with keyless cosign, build provenance attested; no `latest` tag, pin the 
 ```sh
 docker run --rm -p 4320:4320 \
   -e TYPRYX_BACKEND=stub -e TYPRYX_KEYS='k1=agent://demo.example/tester' \
-  ghcr.io/taipanbox/typryx:v0.3.0
+  ghcr.io/taipanbox/typryx:v0.4.0
 ```
+
+Measured 2026-10-04, pulled on a development Mac (Apple Silicon): the published `v0.4.0`
+image is **16.8 MB** (16,764,943 bytes) and boots with `version=v0.4.0` and five templates.
 
 Measured 2026-09-30, pulled on a development Mac (Apple Silicon): the published `v0.3.0`
 image is **16.6 MB** and reports `version=v0.3.0`. With the stub backend,
