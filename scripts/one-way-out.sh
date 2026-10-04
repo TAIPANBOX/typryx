@@ -7,6 +7,14 @@
 # net/http from internal/api, internal/service or cmd/typryx to call out is
 # caught here rather than found later as an ungoverned egress path.
 #
+# internal/wardryxproxy is the one named exception beside internal/backend: the
+# `typryx wardryx-proxy` reverse proxy forwards a caller's own request to the
+# single upstream (wardryx) the operator configured, so it must construct a
+# transport. It originates no request of its own and sends nothing a model
+# provider could see; what it asks of typryx's backend goes through
+# internal/service like every other ask, so the backend stays the only way
+# typed-question state leaves. Its tests prove it dials only that upstream.
+#
 # examples/ is exempted: a standalone program under examples/ (e.g.
 # examples/calibration) is a CLIENT of typryx's own HTTP API, run from
 # outside the process this invariant governs, exactly the same shape as the
@@ -16,7 +24,7 @@
 # to catch. Excluding it here does not weaken the gate over internal/ or
 # cmd/typryx, both of which scripts/gates-have-teeth.sh still proves fail on
 # a planted http.Client{}.
-files=$(find . -name '*.go' -not -name '*_test.go' -not -path './internal/backend/*' -not -path './examples/*' -not -path './.git/*')
+files=$(find . -name '*.go' -not -name '*_test.go' -not -path './internal/backend/*' -not -path './internal/wardryxproxy/*' -not -path './examples/*' -not -path './.git/*')
 [ -n "$files" ] || { echo "FAIL: no .go files found; this gate measured nothing" >&2; exit 1; }
 
 pattern='http\.Client\{|&http\.Client|http\.Transport\{|http\.DefaultClient|http\.Get\(|http\.Post\(|net\.Dial\b|net\.Dialer'
@@ -27,11 +35,11 @@ while IFS= read -r f; do
   matches=$(grep -nE "$pattern" "$f" || true)
   if [ -n "$matches" ]; then
     while IFS= read -r line; do
-      echo "FAIL: $f:$line names an outbound client outside internal/backend" >&2
+      echo "FAIL: $f:$line names an outbound client outside internal/backend and internal/wardryxproxy" >&2
     done <<< "$matches"
     found=1
   fi
 done <<< "$files"
 
 [ "$found" = "0" ] || exit 1
-echo "one way out: no outbound HTTP client construction found outside internal/backend"
+echo "one way out: no outbound HTTP client construction found outside internal/backend and internal/wardryxproxy"

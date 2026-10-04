@@ -144,7 +144,11 @@ in the plan.
 5. **One way out.** Only `internal/backend` may construct an outbound HTTP
    client (`http.Client{}`, `&http.Client`, `http.Transport{}`,
    `http.DefaultClient`, `http.Get`, `http.Post`) or dial directly
-   (`net.Dial`, `net.Dialer`). There is no real network backend in this
+   (`net.Dial`, `net.Dialer`), with one named exception: `internal/wardryxproxy`
+   (invariants 40 to 42), whose transport carries a caller's own request to the
+   single upstream the operator configured and nothing else, and whose tests
+   prove it dials only that upstream. Typed-question state still leaves only
+   through a backend. There is no real network backend in this
    phase, so today this gate holds trivially; it exists now so the day `jev`
    or `openai-logprobs` land, a client built in the wrong package is caught
    immediately rather than found later as an ungoverned egress path.
@@ -601,6 +605,72 @@ in the plan.
     `internal/template`, both run red first against a catalog without the
     file; three mutants each caught: a criterion reworded, `arguments` dropped
     from `fields`, an option renamed)*
+
+40. **The wardryx-proxy forwards everything unchanged, and never alters
+    wardryx's answer.** `typryx wardryx-proxy` (`internal/wardryxproxy`) puts
+    the same method, path, query, headers (`Authorization` included) and body
+    in front of wardryx that it received, for every request except one, and
+    returns wardryx's response byte for byte, status, headers and body. Only
+    `X-Typryx-Key` is removed on the way, since it is typryx's own credential.
+    The one exception is `POST /v1/decide` whose JSON body carries a
+    `tool_call` with a non-blank `name` and an `arguments_truncated` that is
+    absent, null or false: for that, typryx is asked in-process through
+    `service.Service.Ask`, so the template's egress filter, the caps, the
+    ledger and the journal apply exactly as for any ask, and when it answers
+    in time with a valid choice one signal (`name`, `value`, `probability`,
+    `source: "typryx"`, `answer_id`) is appended after any signals already
+    present. Every other outcome (an error, a timeout, `unanswered`, a
+    refusal, a cap, a body that is not an object, a tool call of another shape,
+    signals that are not an array, a request already at wardryx's cap of 16)
+    forwards the original bytes untouched; a body over 1 MiB is streamed
+    through unchanged, never refused here. If wardryx cannot be reached the
+    answer is a 502 with a fixed body that names nothing, so the caller's own
+    fail mode decides. *(test: `TestEveryOtherRouteIsForwardedByteForByte`,
+    `TestADecideWithoutAToolCallIsForwardedUntouched`,
+    `TestADecideWithAToolCallGetsTheSignalAppended`,
+    `TestTheSignalIsAppendedAfterTheCallersOwn`,
+    `TestAnythingButACleanAnswerLeavesTheBodyUntouched`,
+    `TestShapesThatAreNotATypicalToolCallAreForwardedUntouched`,
+    `TestHostileBodiesAreForwardedNotCrashedOn`,
+    `TestABodyOverTheBoundIsStreamedThroughUnchanged`,
+    `TestMutatedBodiesNeverComeOutAsAnythingButTheOriginalOrOneMoreSignal` (200
+    seeds), `TestWardryxBeingDownIsA502NotAnAnswer`,
+    `TestARedirectIsPassedOnAndNothingElseIsDialled` in
+    `internal/wardryxproxy`; mutants named in the PR, each caught)*
+
+41. **A call whose arguments were truncated is never asked about, and the
+    proxy keeps no credential and no argument.** A tool call marked
+    `arguments_truncated` (anything but absent, null or false) is forwarded
+    untouched with no ask: classifying a tool name alone is a guess dressed as
+    an answer. The caller's `Authorization` header is forwarded and appears in
+    no log line and no journal event; the journal records each ask as it
+    records any answer, the answer id and a SHA-384 of the egressed state,
+    under the agent the `X-Typryx-Key` credential names (identity from the
+    credential only, invariant 3), never the arguments. *(test:
+    `TestTruncatedArgumentsAreNeverAskedAbout`,
+    `TestAuthorizationIsForwardedAndNeverLoggedOrRecorded`,
+    `TestTheAskIsOnTheRecordUnderTheCredentialsAgentWithoutTheArguments` in
+    `internal/wardryxproxy`)*
+
+42. **The proxy is configured by name, bound like the service, and refuses
+    what it cannot use.** `TYPRYX_PROXY_ADDR` (loopback by default),
+    `TYPRYX_PROXY_UPSTREAM` (required, absolute http or https, no userinfo,
+    query or fragment), `TYPRYX_PROXY_ASK_TIMEOUT_MS` (default 150, 1 to 5000),
+    `TYPRYX_PROXY_TEMPLATE` (default `action.risk_class`, a choice template
+    whose fields are only `tool`, `arguments` and `target`). A non-loopback
+    bind with no `TYPRYX_KEYS` is refused (exit 1) unless
+    `TYPRYX_ALLOW_OPEN_BIND=1`; with keys, `X-Typryx-Key` is required on every
+    request (401 otherwise, nothing forwarded) and never forwarded. An unusable
+    setting exits 2 naming its variable. Everything else (backend, caps,
+    journal) is the service's own configuration, validated in the same order
+    (`loadConfigAt`). *(test: `TestTheProxyStartsOnLoopbackWithItsDefaults`,
+    `TestAnUnusableProxySettingRefusesToStartNamingTheVariable`,
+    `TestTheProxyRefusesAWideBindWithNoCredentialLikeTheServiceDoes`,
+    `TestTheProxyReadsItsOwnAddressNotTheServices` in `cmd/typryx`;
+    `TestACallerWithoutTheTyprxCredentialIsRefusedWhenKeysAreConfigured` in
+    `internal/wardryxproxy`; `TestTheProxyRunsAsARealProcessAndSignsADecide`,
+    `TestTheProxyRefusesToStartWithoutAnUpstreamOrOnAWideOpenBind` in
+    `internal/manifest`, against the real binary)*
 
 @decided 2026-09-30: a customer chooses one of three data modes for typed
 answers (a hosted Jev, their own model on their own hardware, or off). typryx
