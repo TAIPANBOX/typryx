@@ -466,3 +466,18 @@ Feature: Typed answers, as an option a customer adds to the stack
     When the training set is exported
     Then one row comes out, labelled with the human's truth
     And no held-back field, probability, or backend answer is anywhere in the files
+
+  # @test:TestTheRiskClassTemplateIsTheOneTheEvalsetMeasured
+  Scenario: The risk-class question that ships is the question that was measured
+    Given the starter catalog
+    When the action.risk_class template is read
+    Then it asks about a pending tool call from its tool, arguments and target
+    And offers exactly the five options read_only, reversible_change, destructive, external_send and financial
+    And every instruction and criterion is word for word what the evaluation set measured
+
+  # @test:TestTheRiskClassTemplateSendsToolArgumentsAndTargetAndNothingElse
+  Scenario: Asking about a tool call sends the call and nothing around it
+    Given the action.risk_class template
+    When it is asked about a call whose state also carries a credential and an email address
+    Then the backend receives the tool, the arguments as the object they were, and the target
+    And the credential and the email address are held back and counted

@@ -13,7 +13,7 @@ and recorded.
 ![Go 1.27](https://img.shields.io/badge/Go-1.27-4493f8)
 ![one direct dependency](https://img.shields.io/badge/direct%20dependency-one-2dd4bf)
 ![license Apache 2.0](https://img.shields.io/badge/license-Apache--2.0-9aa7b8)
-![tests](https://img.shields.io/badge/tests-946-brightgreen)
+![tests](https://img.shields.io/badge/tests-948-brightgreen)
 
 </div>
 
@@ -147,6 +147,22 @@ accident. There are three:
 The example templates in `examples/templates` name only the minimum fields a judge
 needs, never a field that identifies a person or a customer; `scripts/templates-load.sh`
 gates that in CI and on every push (CLAUDE.md invariant 28).
+
+The five starter templates:
+
+| Template | Type | Fields | Asks |
+|---|---|---|---|
+| `eval.outcome_met` | noul | `task`, `final_answer` | was the task's outcome met |
+| `eval.answer_quality` | score | `task`, `final_answer` | how complete is the answer, 0 to 3 |
+| `request.complexity` | choice | `prompt` | which router class a prompt belongs to |
+| `triage.anomaly_class` | choice | `anomaly`, `recent_changes` | what caused a cost or usage anomaly |
+| `action.risk_class` | choice | `tool`, `arguments`, `target` | `read_only`, `reversible_change`, `destructive`, `external_send` or `financial`, for a pending tool call |
+
+`action.risk_class` is word for word the question typryx-evalset's family 5 was measured
+on (CLAUDE.md invariant 39), so a risk signal built on it is as good as that measurement
+and no better. It sends the tool name, its arguments and its target, so an operator who
+points it at a hosted model sends those three fields to that processor: choose the
+backend with that in mind.
 
 ## Connect it
 
@@ -846,7 +862,7 @@ go build ./...
 ./scripts/gates-have-teeth.sh
 ```
 
-409 tests. `go test ./... -race` covers every package; `internal/manifest` builds and
+411 tests. `go test ./... -race` covers every package; `internal/manifest` builds and
 starts the real binary to prove `components.json` against what it actually does; CI's
 `image` job builds the Dockerfile on every push and pull request, pushing nowhere.
 

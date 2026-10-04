@@ -1,0 +1,14 @@
+{
+  "id": "action.risk_class",
+  "type": "choice",
+  "instructions": "Classify the risk of the agent's pending tool call described by `tool`, `arguments` and `target`, for a policy decision on whether it may proceed.",
+  "criteria": {
+    "read_only": "reads, lists, searches or inspects data and changes nothing",
+    "reversible_change": "changes state in a way that can be undone, such as creating a draft, adding a label, or updating a non-critical setting",
+    "destructive": "deletes or overwrites data or infrastructure in a way that is hard to undo",
+    "external_send": "sends data or a message outside the organisation, such as an email, a webhook, a public post, or an upload to a third party",
+    "financial": "moves money, buys something, refunds, or changes billing"
+  },
+  "fields": ["tool", "arguments", "target"],
+  "max_state_bytes": 16384
+}
