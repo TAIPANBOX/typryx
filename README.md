@@ -262,7 +262,7 @@ typryx connect curl
 prints one `/v1/ask` and one `/v1/outcome` example, ready to run against a live
 deployment.
 
-**stack-single, stack-up, and stack-k8s** carry no typryx entry yet; see
+**stack-single, stack-up, and stack-k8s** each carry an opt-in typryx entry; see
 [Status](#status).
 
 ## Connect it to Wardryx
@@ -815,7 +815,9 @@ One JSON file per template, in the directory named by `TYPRYX_TEMPLATES`:
 - `max_state_bytes`: defaults to 16384, capped at 1048576.
 - The version is the lowercase hex SHA-256 of the template's own canonical JSON.
 
-`examples/templates/` holds four: `eval.outcome_met` (noul), `eval.answer_quality`
+`examples/templates/` holds five: `action.risk_class` (choice: read_only,
+reversible_change, destructive, external_send, financial, for classifying an agent's
+pending tool call), `eval.outcome_met` (noul), `eval.answer_quality`
 (score, four levels), `request.complexity` (choice: cheap, default, hard,
 reasoning, matching tokenfuse's router task classes), and `triage.anomaly_class`
 (choice: expected_growth, runaway_agent, misconfiguration, price_change, unknown, for
@@ -828,6 +830,7 @@ typryx templates check examples/templates
 ```
 
 ```
+action.risk_class 22fdcc478385a32e5ea7bedbf2644e639a881200325d5d3f9fbc3344346bf718
 eval.answer_quality c953e7fbd1c21dccd07740b478de76511ee3dd3ff97902ee4b5042d90cf55292
 eval.outcome_met 2d3ecbdc88d71358c281ba2163f056bc56559beff4af6a4d937cd6a66f0f732d
 request.complexity b277fb084288c5334ea884df013c9364457807afb3121469c93fb8244c25534d
@@ -970,8 +973,8 @@ file I/O (a failed `OpenFile`, `Sync` or `Truncate` on a file the test just made
 `internal/api` unchanged at 98.9%. Nineteen planted faults (CLAUDE.md invariants 35 to 38)
 were each caught by a named test.
 
-`scripts/gates-have-teeth.sh` plants 18 faults, one per gate behaviour, and requires
-each gate to fail on its own fault and pass on what it must not catch. Eleven defects
+`scripts/gates-have-teeth.sh` runs 20 cases: 14 plant a fault and require the gate to
+fail, 6 plant a non-fault and require the gate to pass. Eleven defects
 were found in a whole-file review on 2026-09-25 and fixed red-first (see CLAUDE.md for
 the mutants each fix's test catches); a twelfth, the `required: null` schema defect
 above, was found afterward by a real MCP client rather than by any test in this
