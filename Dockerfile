@@ -8,7 +8,7 @@
 # Docker 23+ and in Docker Desktop; a host without it needs
 # `docker buildx build`, or drop the `--platform=` line below and lose only
 # the cross-compile.
-ARG GO_VERSION=1.27
+ARG GO_VERSION=1.27.2
 
 FROM --platform=$BUILDPLATFORM golang:${GO_VERSION} AS build
 ENV GOTOOLCHAIN=auto
