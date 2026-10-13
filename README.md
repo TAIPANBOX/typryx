@@ -829,6 +829,8 @@ gates that (see [Where your data goes](#where-your-data-goes)).
 typryx templates check examples/templates
 ```
 
+The output of that command for the five starter templates:
+
 ```
 action.risk_class 22fdcc478385a32e5ea7bedbf2644e639a881200325d5d3f9fbc3344346bf718
 eval.answer_quality c953e7fbd1c21dccd07740b478de76511ee3dd3ff97902ee4b5042d90cf55292
@@ -928,7 +930,11 @@ go build ./...
 ./scripts/no-secrets.sh
 ./scripts/templates-load.sh
 ./scripts/gates-have-teeth.sh
+gosec -quiet ./...
+govulncheck ./...
 ```
+
+`gosec` and `govulncheck` also run in CI's `security` job; CLAUDE.md asks for them before every push.
 
 433 tests. `go test ./... -race` covers every package; `internal/manifest` builds and
 starts the real binary to prove `components.json` against what it actually does; CI's
