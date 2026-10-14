@@ -13,7 +13,7 @@ and recorded.
 ![Go 1.27](https://img.shields.io/badge/Go-1.27-4493f8)
 ![one direct dependency](https://img.shields.io/badge/direct%20dependency-one-2dd4bf)
 ![license Apache 2.0](https://img.shields.io/badge/license-Apache--2.0-9aa7b8)
-![tests](https://img.shields.io/badge/tests-994-brightgreen)
+![tests](https://img.shields.io/badge/tests-996-brightgreen)
 
 </div>
 
@@ -290,8 +290,10 @@ signal `{name: "action.risk_class", value, probability, source: "typryx", answer
 appended to the request's `signals` and the modified body is forwarded. An error, a timeout,
 `unanswered`, a refusal or a cap forwards the original bytes untouched. A call whose arguments
 were truncated is never asked about: classifying a tool name alone would be a guess dressed as
-an answer. The proxy counts each such call in its stats as `skipped:arguments_truncated` and
-logs it, one line per call, with the reason and no argument. Wardryx can turn a signal into a
+an answer. The proxy counts each such call in its stats as `skipped:arguments_truncated`, exactly. It
+logs the skip with the reason and no argument: the first at once, then at most one line every
+ten seconds, each saying how many skips it held back since the line before, so a burst cannot
+flood the log. Wardryx can turn a signal into a
 hold and into nothing else, so a wrong signal costs a person a delay and cannot cost anything
 else. A missing signal is a different matter, and whether it holds a call is wardryx's policy:
 without a wardryx policy option, `when_absent: hold`, a `hold_if_signal` rule does not hold a
@@ -942,7 +944,7 @@ govulncheck ./...
 
 `gosec` and `govulncheck` also run in CI's `security` job; CLAUDE.md asks for them before every push.
 
-441 tests. That is the number of `func Test` functions in the suite. The badge's 994
+443 tests. That is the number of `func Test` functions in the suite. The badge's 996
 counts every `=== RUN` line, subtests included, and `scripts/readme-numbers.sh` measures
 both and fails if either stated number drifts. `go test ./... -race` covers every package;
 `internal/manifest` builds and starts the real binary to prove `components.json` against

@@ -54,6 +54,10 @@ const (
 	// MaxSignals mirrors wardryx's cap: a request already at it is forwarded
 	// as it is rather than made one too long.
 	MaxSignals = 16
+	// SkipLogInterval is the least time between two log lines for truncated
+	// calls. The first skip logs at once; the skips in between are counted in
+	// Stats and reported as a number on the next line.
+	SkipLogInterval = 10 * time.Second
 
 	decidePath = "/v1/decide"
 )
@@ -97,6 +101,8 @@ type Config struct {
 	// Transport carries requests to wardryx. Nil builds one that ignores the
 	// environment's proxy settings and passes bodies through undecoded.
 	Transport http.RoundTripper
+	// Now is the clock behind the skip log interval. Nil is the wall clock.
+	Now func() time.Time
 }
 
 // Proxy forwards to Config.Upstream and adds a signal to a decide request that
@@ -110,6 +116,11 @@ type Proxy struct {
 	mu        sync.Mutex
 	noSignal  map[string]int64
 	logged    map[string]bool
+	// The skip log: whether a line has been written, when, and how many skips
+	// were held back since.
+	skipLogged  bool
+	skipLastLog time.Time
+	skipHeld    int64
 }
 
 // New builds a Proxy from c.
@@ -120,6 +131,9 @@ func New(c Config) *Proxy {
 	}
 	if out.Log == nil {
 		out.Log = slog.New(slog.NewTextHandler(io.Discard, nil))
+	}
+	if out.Now == nil {
+		out.Now = time.Now
 	}
 	if out.Transport == nil {
 		out.Transport = &http.Transport{
@@ -351,14 +365,26 @@ func (p *Proxy) withSignal(ctx context.Context, agent string, body []byte) ([]by
 	return out, true
 }
 
-// skipTruncated counts a truncated tool call and writes one log line for it,
-// every time it happens. The line names the reason and nothing the request
-// carried.
+// skipTruncated counts a truncated tool call. The count is exact. The log line
+// is rate limited: the first skip logs at once, and after that a line is written
+// at most once per SkipLogInterval, reporting how many skips were held back since
+// the previous line. A clock that steps backwards logs again rather than going
+// quiet. The line names the reason and nothing the request carried.
 func (p *Proxy) skipTruncated() {
+	now := p.Now()
 	p.mu.Lock()
 	p.noSignal[ReasonArgumentsTruncated]++
+	if since := now.Sub(p.skipLastLog); p.skipLogged && since >= 0 && since < SkipLogInterval {
+		p.skipHeld++
+		p.mu.Unlock()
+		return
+	}
+	held := p.skipHeld
+	p.skipHeld = 0
+	p.skipLogged = true
+	p.skipLastLog = now
 	p.mu.Unlock()
-	p.Log.Warn("no risk signal added: the tool call's arguments were truncated, so typryx was not asked and wardryx receives the call without one", "reason", ReasonArgumentsTruncated)
+	p.Log.Warn("no risk signal added: the tool call's arguments were truncated, so typryx was not asked and wardryx receives the call without one", "reason", ReasonArgumentsTruncated, "suppressed", held)
 }
 
 // noSignalFor counts a failed ask and logs its reason class once until typryx

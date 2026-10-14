@@ -14,6 +14,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -115,6 +116,7 @@ type rigOpts struct {
 	template   string            // "": the proxy's own default
 	noLog      bool              // true: the proxy is built with no logger
 	transport  http.RoundTripper // nil: the real transport to the fake wardryx
+	clock      *fakeClock        // nil: the wall clock
 }
 
 func destructive() *backendtest.Backend {
@@ -161,6 +163,10 @@ func newRig(t *testing.T, o rigOpts) *rig {
 	if timeout == 0 {
 		timeout = time.Second
 	}
+	var now func() time.Time
+	if o.clock != nil {
+		now = o.clock.Now
+	}
 	var logger *slog.Logger
 	if !o.noLog {
 		logger = slog.New(slog.NewJSONHandler(logs, nil))
@@ -173,6 +179,7 @@ func newRig(t *testing.T, o rigOpts) *rig {
 		Keys:       door.ParseKeys(o.keys),
 		Log:        logger,
 		Transport:  o.transport,
+		Now:        now,
 	})
 	ps := httptest.NewServer(p)
 	t.Cleanup(ps.Close)
@@ -439,13 +446,12 @@ func TestTruncatedArgumentsAreNeverAskedAbout(t *testing.T) {
 	}
 }
 
-// A truncated call is still never asked about, but it is no longer silent: each
-// one is counted under skipped:arguments_truncated and writes one log line that
-// names the reason and carries no argument.
-func TestATruncatedCallIsCountedAsSkippedAndLoggedOncePerSkip(t *testing.T) {
+// A cut-off call is counted and never asked about, and its arguments are
+// written nowhere: not in the log, not in the journal, not in the stats.
+func TestATruncatedCallIsCountedAsSkippedAndNeverLogsItsArguments(t *testing.T) {
 	b := destructive()
 	r := newRig(t, rigOpts{back: b})
-	body := decideBody(`,"tool_call":{"name":"s3.delete_object","arguments":{"key":"` + argMarker + `"},"arguments_truncated":true,"target":"s3://prod-backups"}`)
+	body := truncatedBody()
 	for i := 0; i < 3; i++ {
 		r.do(t, "POST", "/v1/decide", decideHdr, body)
 	}
@@ -456,9 +462,6 @@ func TestATruncatedCallIsCountedAsSkippedAndLoggedOncePerSkip(t *testing.T) {
 	if st.Asked != 0 || st.Signalled != 0 || len(b.Asked) != 0 {
 		t.Errorf("a truncated call was asked: stats %+v, backend asked %d time(s)", st, len(b.Asked))
 	}
-	if n := strings.Count(r.logs.String(), `"reason":"skipped:arguments_truncated"`); n != 3 {
-		t.Errorf("%d log line(s) name the skip, want one per call:\n%s", n, r.logs.String())
-	}
 	if strings.Contains(r.logs.String(), argMarker) {
 		t.Errorf("an argument reached the log:\n%s", r.logs.String())
 	}
@@ -466,6 +469,104 @@ func TestATruncatedCallIsCountedAsSkippedAndLoggedOncePerSkip(t *testing.T) {
 		if !bytes.Equal(s.Body, body) {
 			t.Errorf("request %d: the truncated call was changed on the way: %s", i, s.Body)
 		}
+	}
+}
+
+// truncatedBody is a decide request whose tool call lost its arguments on the
+// way to the proxy, with an argument marker a log must never show.
+func truncatedBody() []byte {
+	return decideBody(`,"tool_call":{"name":"s3.delete_object","arguments":{"key":"` + argMarker + `"},"arguments_truncated":true,"target":"s3://prod-backups"}`)
+}
+
+// skipLines returns the log lines that name a skipped truncated call.
+func skipLines(logs string) []string {
+	var out []string
+	for _, l := range strings.Split(logs, "\n") {
+		if strings.Contains(l, `"reason":"skipped:arguments_truncated"`) {
+			out = append(out, l)
+		}
+	}
+	return out
+}
+
+// fakeClock is a clock a test moves by hand.
+type fakeClock struct{ ns atomic.Int64 }
+
+func newFakeClock() *fakeClock {
+	c := &fakeClock{}
+	c.ns.Store(time.Date(2026, time.October, 14, 12, 0, 0, 0, time.UTC).UnixNano())
+	return c
+}
+
+func (c *fakeClock) Now() time.Time          { return time.Unix(0, c.ns.Load()) }
+func (c *fakeClock) Advance(d time.Duration) { c.ns.Add(int64(d)) }
+
+// A burst of cut-off calls inside one interval writes one log line, and every
+// call in the burst is still counted.
+func TestRapidTruncatedSkipsLogOneLineWithTheCountSuppressed(t *testing.T) {
+	clock := newFakeClock()
+	r := newRig(t, rigOpts{back: destructive(), clock: clock})
+	for i := 0; i < 5; i++ {
+		r.do(t, "POST", "/v1/decide", decideHdr, truncatedBody())
+	}
+	if got := r.p.Stats().NoSignal["skipped:arguments_truncated"]; got != 5 {
+		t.Fatalf("skipped:arguments_truncated = %d, want 5: the rate limit must not change the count", got)
+	}
+	lines := skipLines(r.logs.String())
+	if len(lines) != 1 {
+		t.Fatalf("5 rapid skips wrote %d log line(s), want 1:\n%s", len(lines), r.logs.String())
+	}
+	if !strings.Contains(lines[0], `"suppressed":0`) {
+		t.Errorf("the first line must report nothing held back: %s", lines[0])
+	}
+	if strings.Contains(r.logs.String(), argMarker) {
+		t.Errorf("an argument reached the log:\n%s", r.logs.String())
+	}
+}
+
+// The first skip after the interval logs again and reports how many skips were
+// held back since the previous line. A skip just inside the interval is held
+// back; one exactly at the interval is logged.
+func TestASkipAfterTheIntervalLogsAgainWithTheSuppressedCount(t *testing.T) {
+	clock := newFakeClock()
+	r := newRig(t, rigOpts{back: destructive(), clock: clock})
+	skip := func(n int) {
+		for i := 0; i < n; i++ {
+			r.do(t, "POST", "/v1/decide", decideHdr, truncatedBody())
+		}
+	}
+	lines := func() []string { return skipLines(r.logs.String()) }
+
+	skip(4) // one line at once, three held back
+	if n := len(lines()); n != 1 {
+		t.Fatalf("four rapid skips wrote %d line(s), want 1", n)
+	}
+	clock.Advance(wardryxproxy.SkipLogInterval - time.Second)
+	skip(1) // nine seconds after the line: held back
+	if n := len(lines()); n != 1 {
+		t.Fatalf("a skip inside the interval wrote a line (%d in all), want none", n)
+	}
+	clock.Advance(time.Second)
+	skip(1) // exactly the interval after the line: logged, with four held back
+	if n := len(lines()); n != 2 {
+		t.Fatalf("a skip at the interval wrote %d line(s) in all, want 2:\n%s", n, r.logs.String())
+	}
+	if !strings.Contains(lines()[1], `"suppressed":4`) {
+		t.Errorf("the second line must report the four held back: %s", lines()[1])
+	}
+	skip(1) // held back again
+	clock.Advance(wardryxproxy.SkipLogInterval)
+	skip(1) // logged, with the one held back
+	if n := len(lines()); n != 3 || !strings.Contains(lines()[2], `"suppressed":1`) {
+		t.Fatalf("the third line: %d line(s) in all, want 3 with one held back:\n%s", n, r.logs.String())
+	}
+	clock.Advance(-time.Minute) // the clock stepped back: that must not silence the log
+	skip(1)
+	if n := len(lines()); n != 4 {
+		t.Fatalf("a clock that stepped back silenced the log: %d line(s) in all, want 4", n)
+	}
+	if got := r.p.Stats().NoSignal["skipped:arguments_truncated"]; got != 9 {
+		t.Errorf("skipped:arguments_truncated = %d, want 9: every skip counted, logged or not", got)
 	}
 }
 
