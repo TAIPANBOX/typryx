@@ -513,6 +513,24 @@ Feature: Typed answers, as an option a customer adds to the stack
     When it passes through the proxy
     Then typryx is not asked and wardryx receives the request untouched
 
+  # @test:TestATruncatedCallIsCountedAsSkippedAndNeverLogsItsArguments
+  Scenario: A cut-off call is counted, and its arguments are written nowhere
+    Given tool calls marked as having truncated arguments, each carrying an argument value
+    When they pass through the proxy
+    Then each one is counted as skipped for truncated arguments, and no argument value reaches the log
+
+  # @test:TestRapidTruncatedSkipsLogOneLineWithTheCountSuppressed
+  Scenario: A burst of cut-off calls writes one log line, and every call is still counted
+    Given five tool calls marked as having truncated arguments, arriving within one interval
+    When they pass through the proxy
+    Then the stats count all five, and the log holds one line for them that reports nothing held back
+
+  # @test:TestASkipAfterTheIntervalLogsAgainWithTheSuppressedCount
+  Scenario: A cut-off call after the interval is logged again, with the count held back
+    Given a burst of cut-off calls, then a call once the interval has passed, then the clock set back
+    When they pass through the proxy
+    Then each line written reports how many skips it held back since the line before, and the clock set back does not silence the log
+
   # @test:TestMutatedBodiesNeverComeOutAsAnythingButTheOriginalOrOneMoreSignal
   Scenario: Hostile bodies come out as they went in, or with one more signal
     Given two hundred seeded mutations of a valid decide body

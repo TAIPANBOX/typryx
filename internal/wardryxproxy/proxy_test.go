@@ -14,6 +14,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -112,6 +113,10 @@ type rigOpts struct {
 	askTimeout time.Duration
 	keys       string
 	maxCalls   int64
+	template   string            // "": the proxy's own default
+	noLog      bool              // true: the proxy is built with no logger
+	transport  http.RoundTripper // nil: the real transport to the fake wardryx
+	clock      *fakeClock        // nil: the wall clock
 }
 
 func destructive() *backendtest.Backend {
@@ -158,13 +163,23 @@ func newRig(t *testing.T, o rigOpts) *rig {
 	if timeout == 0 {
 		timeout = time.Second
 	}
+	var now func() time.Time
+	if o.clock != nil {
+		now = o.clock.Now
+	}
+	var logger *slog.Logger
+	if !o.noLog {
+		logger = slog.New(slog.NewJSONHandler(logs, nil))
+	}
 	p := wardryxproxy.New(wardryxproxy.Config{
 		Upstream:   u,
 		Service:    svc,
-		Template:   wardryxproxy.DefaultTemplate,
+		Template:   o.template,
 		AskTimeout: timeout,
 		Keys:       door.ParseKeys(o.keys),
-		Log:        slog.New(slog.NewJSONHandler(logs, nil)),
+		Log:        logger,
+		Transport:  o.transport,
+		Now:        now,
 	})
 	ps := httptest.NewServer(p)
 	t.Cleanup(ps.Close)
@@ -431,6 +446,130 @@ func TestTruncatedArgumentsAreNeverAskedAbout(t *testing.T) {
 	}
 }
 
+// A cut-off call is counted and never asked about, and its arguments are
+// written nowhere: not in the log, not in the journal, not in the stats.
+func TestATruncatedCallIsCountedAsSkippedAndNeverLogsItsArguments(t *testing.T) {
+	b := destructive()
+	r := newRig(t, rigOpts{back: b})
+	body := truncatedBody()
+	for i := 0; i < 3; i++ {
+		r.do(t, "POST", "/v1/decide", decideHdr, body)
+	}
+	st := r.p.Stats()
+	if got := st.NoSignal["skipped:arguments_truncated"]; got != 3 {
+		t.Errorf("skipped:arguments_truncated = %d, want 3, one per truncated call; stats %+v", got, st)
+	}
+	if st.Asked != 0 || st.Signalled != 0 || len(b.Asked) != 0 {
+		t.Errorf("a truncated call was asked: stats %+v, backend asked %d time(s)", st, len(b.Asked))
+	}
+	if strings.Contains(r.logs.String(), argMarker) {
+		t.Errorf("an argument reached the log:\n%s", r.logs.String())
+	}
+	for i, s := range r.up.all() {
+		if !bytes.Equal(s.Body, body) {
+			t.Errorf("request %d: the truncated call was changed on the way: %s", i, s.Body)
+		}
+	}
+}
+
+// truncatedBody is a decide request whose tool call lost its arguments on the
+// way to the proxy, with an argument marker a log must never show.
+func truncatedBody() []byte {
+	return decideBody(`,"tool_call":{"name":"s3.delete_object","arguments":{"key":"` + argMarker + `"},"arguments_truncated":true,"target":"s3://prod-backups"}`)
+}
+
+// skipLines returns the log lines that name a skipped truncated call.
+func skipLines(logs string) []string {
+	var out []string
+	for _, l := range strings.Split(logs, "\n") {
+		if strings.Contains(l, `"reason":"skipped:arguments_truncated"`) {
+			out = append(out, l)
+		}
+	}
+	return out
+}
+
+// fakeClock is a clock a test moves by hand.
+type fakeClock struct{ ns atomic.Int64 }
+
+func newFakeClock() *fakeClock {
+	c := &fakeClock{}
+	c.ns.Store(time.Date(2026, time.October, 14, 12, 0, 0, 0, time.UTC).UnixNano())
+	return c
+}
+
+func (c *fakeClock) Now() time.Time          { return time.Unix(0, c.ns.Load()) }
+func (c *fakeClock) Advance(d time.Duration) { c.ns.Add(int64(d)) }
+
+// A burst of cut-off calls inside one interval writes one log line, and every
+// call in the burst is still counted.
+func TestRapidTruncatedSkipsLogOneLineWithTheCountSuppressed(t *testing.T) {
+	clock := newFakeClock()
+	r := newRig(t, rigOpts{back: destructive(), clock: clock})
+	for i := 0; i < 5; i++ {
+		r.do(t, "POST", "/v1/decide", decideHdr, truncatedBody())
+	}
+	if got := r.p.Stats().NoSignal["skipped:arguments_truncated"]; got != 5 {
+		t.Fatalf("skipped:arguments_truncated = %d, want 5: the rate limit must not change the count", got)
+	}
+	lines := skipLines(r.logs.String())
+	if len(lines) != 1 {
+		t.Fatalf("5 rapid skips wrote %d log line(s), want 1:\n%s", len(lines), r.logs.String())
+	}
+	if !strings.Contains(lines[0], `"suppressed":0`) {
+		t.Errorf("the first line must report nothing held back: %s", lines[0])
+	}
+	if strings.Contains(r.logs.String(), argMarker) {
+		t.Errorf("an argument reached the log:\n%s", r.logs.String())
+	}
+}
+
+// The first skip after the interval logs again and reports how many skips were
+// held back since the previous line. A skip just inside the interval is held
+// back; one exactly at the interval is logged.
+func TestASkipAfterTheIntervalLogsAgainWithTheSuppressedCount(t *testing.T) {
+	clock := newFakeClock()
+	r := newRig(t, rigOpts{back: destructive(), clock: clock})
+	skip := func(n int) {
+		for i := 0; i < n; i++ {
+			r.do(t, "POST", "/v1/decide", decideHdr, truncatedBody())
+		}
+	}
+	lines := func() []string { return skipLines(r.logs.String()) }
+
+	skip(4) // one line at once, three held back
+	if n := len(lines()); n != 1 {
+		t.Fatalf("four rapid skips wrote %d line(s), want 1", n)
+	}
+	clock.Advance(wardryxproxy.SkipLogInterval - time.Second)
+	skip(1) // nine seconds after the line: held back
+	if n := len(lines()); n != 1 {
+		t.Fatalf("a skip inside the interval wrote a line (%d in all), want none", n)
+	}
+	clock.Advance(time.Second)
+	skip(1) // exactly the interval after the line: logged, with four held back
+	if n := len(lines()); n != 2 {
+		t.Fatalf("a skip at the interval wrote %d line(s) in all, want 2:\n%s", n, r.logs.String())
+	}
+	if !strings.Contains(lines()[1], `"suppressed":4`) {
+		t.Errorf("the second line must report the four held back: %s", lines()[1])
+	}
+	skip(1) // held back again
+	clock.Advance(wardryxproxy.SkipLogInterval)
+	skip(1) // logged, with the one held back
+	if n := len(lines()); n != 3 || !strings.Contains(lines()[2], `"suppressed":1`) {
+		t.Fatalf("the third line: %d line(s) in all, want 3 with one held back:\n%s", n, r.logs.String())
+	}
+	clock.Advance(-time.Minute) // the clock stepped back: that must not silence the log
+	skip(1)
+	if n := len(lines()); n != 4 {
+		t.Fatalf("a clock that stepped back silenced the log: %d line(s) in all, want 4", n)
+	}
+	if got := r.p.Stats().NoSignal["skipped:arguments_truncated"]; got != 9 {
+		t.Errorf("skipped:arguments_truncated = %d, want 9: every skip counted, logged or not", got)
+	}
+}
+
 func TestShapesThatAreNotATypicalToolCallAreForwardedUntouched(t *testing.T) {
 	b := destructive()
 	r := newRig(t, rigOpts{back: b})
@@ -646,5 +785,149 @@ func TestARedirectIsPassedOnAndNothingElseIsDialled(t *testing.T) {
 	}
 	if hits != 0 {
 		t.Fatalf("the redirect target was dialled %d time(s)", hits)
+	}
+}
+
+// --- the proxy's own paths ---
+
+// A proxy built with no logger still counts, signs and forwards.
+func TestAProxyWithNoLoggerStillCountsSignsAndForwards(t *testing.T) {
+	r := newRig(t, rigOpts{back: destructive(), noLog: true})
+	r.do(t, "POST", "/v1/decide", decideHdr, decideBody(toolCall(`{}`)))
+	r.do(t, "POST", "/v1/decide", decideHdr, decideBody(`,"tool_call":{"name":"t","arguments_truncated":true}`))
+	if st := r.p.Stats(); st.Signalled != 1 || st.NoSignal["skipped:arguments_truncated"] != 1 {
+		t.Fatalf("stats = %+v", st)
+	}
+	if n := len(r.up.all()); n != 2 {
+		t.Fatalf("wardryx received %d request(s), want 2", n)
+	}
+}
+
+// With no template configured the proxy asks the starter template, whose
+// egress is the tool, the arguments and the target and nothing else.
+func TestAnUnsetTemplateAsksTheStarterTemplate(t *testing.T) {
+	b := destructive()
+	r := newRig(t, rigOpts{back: b})
+	r.do(t, "POST", "/v1/decide", decideHdr, decideBody(toolCall(`{}`)))
+	if len(b.Asked) != 1 {
+		t.Fatalf("typryx was asked %d time(s), want 1", len(b.Asked))
+	}
+	var egress map[string]json.RawMessage
+	_ = json.Unmarshal(b.Asked[0].Egress.Canonical(), &egress)
+	if len(egress) != 3 || string(egress["tool"]) != `"s3.delete_object"` || string(egress["target"]) != `"s3://prod-backups"` || egress["arguments"] == nil {
+		t.Fatalf("what typryx's backend received: %s", b.Asked[0].Egress.Canonical())
+	}
+}
+
+// A template that is not a choice never becomes a signal: its answer is
+// refused as invalid for this purpose, and the request goes on untouched.
+func TestANonChoiceTemplateNeverGivesASignal(t *testing.T) {
+	r := newRig(t, rigOpts{template: "eval.outcome_met"})
+	body := decideBody(toolCall(`{}`))
+	r.do(t, "POST", "/v1/decide", decideHdr, body)
+	if !bytes.Equal(r.up.last(t).Body, body) {
+		t.Fatalf("a non-choice answer was turned into a signal: %s", r.up.last(t).Body)
+	}
+	if st := r.p.Stats(); st.Signalled != 0 || st.NoSignal[wardryxproxy.ReasonInvalid] != 1 {
+		t.Fatalf("stats = %+v", st)
+	}
+}
+
+// A failed ask is logged once, and only again after typryx has answered.
+func TestAFailingAskIsLoggedOnceUntilTypryxAnswersAgain(t *testing.T) {
+	b := destructive()
+	b.Mode = backendtest.ModeFail
+	r := newRig(t, rigOpts{back: b})
+	body := decideBody(toolCall(`{}`))
+	logged := func() int { return strings.Count(r.logs.String(), "no risk signal added") }
+
+	r.do(t, "POST", "/v1/decide", decideHdr, body)
+	r.do(t, "POST", "/v1/decide", decideHdr, body)
+	if n := logged(); n != 1 {
+		t.Fatalf("two failed asks logged %d line(s), want 1", n)
+	}
+	b.Mode = backendtest.ModeOK
+	r.do(t, "POST", "/v1/decide", decideHdr, body)
+	if st := r.p.Stats(); st.Signalled != 1 {
+		t.Fatalf("typryx answered but no signal was added: %+v", st)
+	}
+	b.Mode = backendtest.ModeFail
+	r.do(t, "POST", "/v1/decide", decideHdr, body)
+	if n := logged(); n != 2 {
+		t.Fatalf("after an answer, a failed ask logged %d line(s) in all, want 2", n)
+	}
+	var failed int64
+	for _, v := range r.p.Stats().NoSignal {
+		failed += v
+	}
+	if failed != 3 {
+		t.Fatalf("failed asks counted %d, want 3", failed)
+	}
+}
+
+// failingTransport answers every request with err, as a dead or slow upstream
+// would.
+type failingTransport struct{ err error }
+
+func (f failingTransport) RoundTrip(*http.Request) (*http.Response, error) { return nil, f.err }
+
+// timeoutErr is a network timeout, the way a dial or a read reports one.
+type timeoutErr struct{}
+
+func (timeoutErr) Error() string   { return "i/o timeout" }
+func (timeoutErr) Timeout() bool   { return true }
+func (timeoutErr) Temporary() bool { return true }
+
+// An upstream timeout is a 502 with the fixed body, counted as a timeout and
+// never as an answer.
+func TestAnUpstreamTimeoutIsA502CountedAsATimeout(t *testing.T) {
+	r := newRig(t, rigOpts{transport: failingTransport{err: timeoutErr{}}})
+	resp, got := r.do(t, "POST", "/v1/decide", decideHdr, decideBody(toolCall(`{}`)))
+	if resp.StatusCode != http.StatusBadGateway || string(got) != `{"error":"the upstream could not be reached"}`+"\n" {
+		t.Fatalf("status %d, body %q", resp.StatusCode, got)
+	}
+	if n := r.p.Stats().NoSignal["upstream_timeout"]; n != 1 {
+		t.Fatalf("upstream_timeout counted %d, want 1", n)
+	}
+}
+
+// The forwarding headers a caller sets are forwarded as sent: the proxy does
+// not rewrite them.
+func TestTheCallersForwardingHeadersReachWardryxAsSent(t *testing.T) {
+	r := newRig(t, rigOpts{})
+	hdr := map[string]string{
+		"X-Forwarded-For":   "10.1.2.3",
+		"X-Forwarded-Host":  "gateway.example",
+		"X-Forwarded-Proto": "https",
+		"Forwarded":         "for=10.1.2.3",
+	}
+	r.do(t, "GET", "/v1/status", hdr, nil)
+	seen := r.up.last(t)
+	for k, v := range hdr {
+		if got := seen.Header.Get(k); got != v {
+			t.Errorf("%s reached wardryx as %q, want %q", k, got, v)
+		}
+	}
+}
+
+// brokenBody is a request body that fails as it is read, as a dropped
+// connection does.
+type brokenBody struct{}
+
+func (brokenBody) Read([]byte) (int, error) { return 0, io.ErrUnexpectedEOF }
+func (brokenBody) Close() error             { return nil }
+
+// A body the proxy cannot read is refused with a 400 before anything reaches
+// wardryx.
+func TestAnUnreadableBodyIsRefusedBeforeAnythingReachesWardryx(t *testing.T) {
+	r := newRig(t, rigOpts{back: destructive()})
+	req := httptest.NewRequest(http.MethodPost, "/v1/decide", brokenBody{})
+	rec := httptest.NewRecorder()
+	r.p.ServeHTTP(rec, req)
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("status %d, want 400", rec.Code)
+	}
+	if n := len(r.up.all()); n != 0 {
+		t.Fatalf("wardryx received %d request(s) for a body the proxy could not read", n)
 	}
 }

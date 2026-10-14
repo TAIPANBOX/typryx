@@ -642,12 +642,23 @@ in the plan.
     proxy keeps no credential and no argument.** A tool call marked
     `arguments_truncated` (anything but absent, null or false) is forwarded
     untouched with no ask: classifying a tool name alone is a guess dressed as
-    an answer. The caller's `Authorization` header is forwarded and appears in
+    an answer. Each such skip is counted in `Stats` under
+    `skipped:arguments_truncated`, exactly. The log says it too: the first skip
+    writes a line at once, and later skips write at most one line per
+    `SkipLogInterval` (ten seconds), each reporting how many skips it held back
+    since the line before. A line names that reason and no argument, so a skip
+    is never silent and a burst cannot flood the log. A body over the 1 MiB
+    bound is streamed through unread, so a truncated call inside one is not
+    counted.
+    The caller's `Authorization` header is forwarded and appears in
     no log line and no journal event; the journal records each ask as it
     records any answer, the answer id and a SHA-384 of the egressed state,
     under the agent the `X-Typryx-Key` credential names (identity from the
     credential only, invariant 3), never the arguments. *(test:
     `TestTruncatedArgumentsAreNeverAskedAbout`,
+    `TestATruncatedCallIsCountedAsSkippedAndNeverLogsItsArguments`,
+    `TestRapidTruncatedSkipsLogOneLineWithTheCountSuppressed`,
+    `TestASkipAfterTheIntervalLogsAgainWithTheSuppressedCount`,
     `TestAuthorizationIsForwardedAndNeverLoggedOrRecorded`,
     `TestTheAskIsOnTheRecordUnderTheCredentialsAgentWithoutTheArguments` in
     `internal/wardryxproxy`)*

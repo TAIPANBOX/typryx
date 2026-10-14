@@ -13,8 +13,10 @@
 //
 // That is what keeps wardryx generic: it reads `signals` and names no add-on,
 // and a deployment without this proxy runs the identical wardryx. Wardryx can
-// only turn a signal into a hold, never a deny, so a signal that is wrong, or
-// absent, costs a person a delay and nothing else.
+// only turn a signal into a hold, never a deny, so a wrong signal costs a person
+// a delay and nothing else. A missing signal is different: whether it holds a
+// call is wardryx's policy, so a skipped truncated call and an ask that gave no
+// signal are counted in Stats by reason, never passed on silently.
 //
 // If wardryx cannot be reached the proxy answers 502, so the caller's own
 // fail mode decides what that means (tokenfuse: failmode=closed refuses).
@@ -52,6 +54,10 @@ const (
 	// MaxSignals mirrors wardryx's cap: a request already at it is forwarded
 	// as it is rather than made one too long.
 	MaxSignals = 16
+	// SkipLogInterval is the least time between two log lines for truncated
+	// calls. The first skip logs at once; the skips in between are counted in
+	// Stats and reported as a number on the next line.
+	SkipLogInterval = 10 * time.Second
 
 	decidePath = "/v1/decide"
 )
@@ -61,9 +67,14 @@ const (
 	ReasonUnanswered = "unanswered"
 	ReasonRefused    = "refused"
 	ReasonInvalid    = "invalid_answer"
+	// ReasonArgumentsTruncated counts a tool call the proxy skipped because its
+	// arguments were cut off before they reached it. typryx is never asked about
+	// such a call, so this is a skip rather than a failed ask.
+	ReasonArgumentsTruncated = "skipped:arguments_truncated"
 )
 
 // Stats counts what the proxy did with decide requests it could have signed.
+// NoSignal is keyed by reason, skips included.
 type Stats struct {
 	Asked     int64
 	Signalled int64
@@ -90,6 +101,8 @@ type Config struct {
 	// Transport carries requests to wardryx. Nil builds one that ignores the
 	// environment's proxy settings and passes bodies through undecoded.
 	Transport http.RoundTripper
+	// Now is the clock behind the skip log interval. Nil is the wall clock.
+	Now func() time.Time
 }
 
 // Proxy forwards to Config.Upstream and adds a signal to a decide request that
@@ -103,6 +116,11 @@ type Proxy struct {
 	mu        sync.Mutex
 	noSignal  map[string]int64
 	logged    map[string]bool
+	// The skip log: whether a line has been written, when, and how many skips
+	// were held back since.
+	skipLogged  bool
+	skipLastLog time.Time
+	skipHeld    int64
 }
 
 // New builds a Proxy from c.
@@ -113,6 +131,9 @@ func New(c Config) *Proxy {
 	}
 	if out.Log == nil {
 		out.Log = slog.New(slog.NewTextHandler(io.Discard, nil))
+	}
+	if out.Now == nil {
+		out.Now = time.Now
 	}
 	if out.Transport == nil {
 		out.Transport = &http.Transport{
@@ -263,6 +284,7 @@ func (p *Proxy) withSignal(ctx context.Context, agent string, body []byte) ([]by
 	// name alone would be a guess dressed as an answer. Only an absent, null or
 	// false marker is "not truncated"; anything else is read as truncated.
 	if t := bytes.TrimSpace(tc.Truncated); len(t) > 0 && !bytes.Equal(t, []byte("null")) && !bytes.Equal(t, []byte("false")) {
+		p.skipTruncated()
 		return nil, false
 	}
 	var target string
@@ -341,6 +363,28 @@ func (p *Proxy) withSignal(ctx context.Context, agent string, body []byte) ([]by
 	p.signalled.Add(1)
 	p.recovered()
 	return out, true
+}
+
+// skipTruncated counts a truncated tool call. The count is exact. The log line
+// is rate limited: the first skip logs at once, and after that a line is written
+// at most once per SkipLogInterval, reporting how many skips were held back since
+// the previous line. A clock that steps backwards logs again rather than going
+// quiet. The line names the reason and nothing the request carried.
+func (p *Proxy) skipTruncated() {
+	now := p.Now()
+	p.mu.Lock()
+	p.noSignal[ReasonArgumentsTruncated]++
+	if since := now.Sub(p.skipLastLog); p.skipLogged && since >= 0 && since < SkipLogInterval {
+		p.skipHeld++
+		p.mu.Unlock()
+		return
+	}
+	held := p.skipHeld
+	p.skipHeld = 0
+	p.skipLogged = true
+	p.skipLastLog = now
+	p.mu.Unlock()
+	p.Log.Warn("no risk signal added: the tool call's arguments were truncated, so typryx was not asked and wardryx receives the call without one", "reason", ReasonArgumentsTruncated, "suppressed", held)
 }
 
 // noSignalFor counts a failed ask and logs its reason class once until typryx
