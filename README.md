@@ -936,9 +936,12 @@ govulncheck ./...
 
 `gosec` and `govulncheck` also run in CI's `security` job; CLAUDE.md asks for them before every push.
 
-433 tests. `go test ./... -race` covers every package; `internal/manifest` builds and
-starts the real binary to prove `components.json` against what it actually does; CI's
-`image` job builds the Dockerfile on every push and pull request, pushing nowhere.
+433 tests. That is the number of `func Test` functions in the suite. The badge's 986
+counts every `=== RUN` line, subtests included, and `scripts/readme-numbers.sh` measures
+both and fails if either stated number drifts. `go test ./... -race` covers every package;
+`internal/manifest` builds and starts the real binary to prove `components.json` against
+what it actually does; CI's `image` job builds the Dockerfile on every push and pull
+request, pushing nowhere.
 
 Coverage (`go test ./... -coverprofile=cover.out -race`, measured 2026-09-25, after phase
 D landed): **87.9%** overall, up from 87.1% before this phase. `internal/backend` rose to
