@@ -13,8 +13,10 @@
 //
 // That is what keeps wardryx generic: it reads `signals` and names no add-on,
 // and a deployment without this proxy runs the identical wardryx. Wardryx can
-// only turn a signal into a hold, never a deny, so a signal that is wrong, or
-// absent, costs a person a delay and nothing else.
+// only turn a signal into a hold, never a deny, so a wrong signal costs a person
+// a delay and nothing else. A missing signal is different: whether it holds a
+// call is wardryx's policy, so a skipped truncated call and an ask that gave no
+// signal are counted in Stats by reason, never passed on silently.
 //
 // If wardryx cannot be reached the proxy answers 502, so the caller's own
 // fail mode decides what that means (tokenfuse: failmode=closed refuses).
@@ -61,9 +63,14 @@ const (
 	ReasonUnanswered = "unanswered"
 	ReasonRefused    = "refused"
 	ReasonInvalid    = "invalid_answer"
+	// ReasonArgumentsTruncated counts a tool call the proxy skipped because its
+	// arguments were cut off before they reached it. typryx is never asked about
+	// such a call, so this is a skip rather than a failed ask.
+	ReasonArgumentsTruncated = "skipped:arguments_truncated"
 )
 
 // Stats counts what the proxy did with decide requests it could have signed.
+// NoSignal is keyed by reason, skips included.
 type Stats struct {
 	Asked     int64
 	Signalled int64
@@ -263,6 +270,7 @@ func (p *Proxy) withSignal(ctx context.Context, agent string, body []byte) ([]by
 	// name alone would be a guess dressed as an answer. Only an absent, null or
 	// false marker is "not truncated"; anything else is read as truncated.
 	if t := bytes.TrimSpace(tc.Truncated); len(t) > 0 && !bytes.Equal(t, []byte("null")) && !bytes.Equal(t, []byte("false")) {
+		p.skipTruncated()
 		return nil, false
 	}
 	var target string
@@ -341,6 +349,16 @@ func (p *Proxy) withSignal(ctx context.Context, agent string, body []byte) ([]by
 	p.signalled.Add(1)
 	p.recovered()
 	return out, true
+}
+
+// skipTruncated counts a truncated tool call and writes one log line for it,
+// every time it happens. The line names the reason and nothing the request
+// carried.
+func (p *Proxy) skipTruncated() {
+	p.mu.Lock()
+	p.noSignal[ReasonArgumentsTruncated]++
+	p.mu.Unlock()
+	p.Log.Warn("no risk signal added: the tool call's arguments were truncated, so typryx was not asked and wardryx receives the call without one", "reason", ReasonArgumentsTruncated)
 }
 
 // noSignalFor counts a failed ask and logs its reason class once until typryx

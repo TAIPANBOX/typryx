@@ -112,6 +112,9 @@ type rigOpts struct {
 	askTimeout time.Duration
 	keys       string
 	maxCalls   int64
+	template   string            // "": the proxy's own default
+	noLog      bool              // true: the proxy is built with no logger
+	transport  http.RoundTripper // nil: the real transport to the fake wardryx
 }
 
 func destructive() *backendtest.Backend {
@@ -158,13 +161,18 @@ func newRig(t *testing.T, o rigOpts) *rig {
 	if timeout == 0 {
 		timeout = time.Second
 	}
+	var logger *slog.Logger
+	if !o.noLog {
+		logger = slog.New(slog.NewJSONHandler(logs, nil))
+	}
 	p := wardryxproxy.New(wardryxproxy.Config{
 		Upstream:   u,
 		Service:    svc,
-		Template:   wardryxproxy.DefaultTemplate,
+		Template:   o.template,
 		AskTimeout: timeout,
 		Keys:       door.ParseKeys(o.keys),
-		Log:        slog.New(slog.NewJSONHandler(logs, nil)),
+		Log:        logger,
+		Transport:  o.transport,
 	})
 	ps := httptest.NewServer(p)
 	t.Cleanup(ps.Close)
@@ -431,6 +439,36 @@ func TestTruncatedArgumentsAreNeverAskedAbout(t *testing.T) {
 	}
 }
 
+// A truncated call is still never asked about, but it is no longer silent: each
+// one is counted under skipped:arguments_truncated and writes one log line that
+// names the reason and carries no argument.
+func TestATruncatedCallIsCountedAsSkippedAndLoggedOncePerSkip(t *testing.T) {
+	b := destructive()
+	r := newRig(t, rigOpts{back: b})
+	body := decideBody(`,"tool_call":{"name":"s3.delete_object","arguments":{"key":"` + argMarker + `"},"arguments_truncated":true,"target":"s3://prod-backups"}`)
+	for i := 0; i < 3; i++ {
+		r.do(t, "POST", "/v1/decide", decideHdr, body)
+	}
+	st := r.p.Stats()
+	if got := st.NoSignal["skipped:arguments_truncated"]; got != 3 {
+		t.Errorf("skipped:arguments_truncated = %d, want 3, one per truncated call; stats %+v", got, st)
+	}
+	if st.Asked != 0 || st.Signalled != 0 || len(b.Asked) != 0 {
+		t.Errorf("a truncated call was asked: stats %+v, backend asked %d time(s)", st, len(b.Asked))
+	}
+	if n := strings.Count(r.logs.String(), `"reason":"skipped:arguments_truncated"`); n != 3 {
+		t.Errorf("%d log line(s) name the skip, want one per call:\n%s", n, r.logs.String())
+	}
+	if strings.Contains(r.logs.String(), argMarker) {
+		t.Errorf("an argument reached the log:\n%s", r.logs.String())
+	}
+	for i, s := range r.up.all() {
+		if !bytes.Equal(s.Body, body) {
+			t.Errorf("request %d: the truncated call was changed on the way: %s", i, s.Body)
+		}
+	}
+}
+
 func TestShapesThatAreNotATypicalToolCallAreForwardedUntouched(t *testing.T) {
 	b := destructive()
 	r := newRig(t, rigOpts{back: b})
@@ -646,5 +684,149 @@ func TestARedirectIsPassedOnAndNothingElseIsDialled(t *testing.T) {
 	}
 	if hits != 0 {
 		t.Fatalf("the redirect target was dialled %d time(s)", hits)
+	}
+}
+
+// --- the proxy's own paths ---
+
+// A proxy built with no logger still counts, signs and forwards.
+func TestAProxyWithNoLoggerStillCountsSignsAndForwards(t *testing.T) {
+	r := newRig(t, rigOpts{back: destructive(), noLog: true})
+	r.do(t, "POST", "/v1/decide", decideHdr, decideBody(toolCall(`{}`)))
+	r.do(t, "POST", "/v1/decide", decideHdr, decideBody(`,"tool_call":{"name":"t","arguments_truncated":true}`))
+	if st := r.p.Stats(); st.Signalled != 1 || st.NoSignal["skipped:arguments_truncated"] != 1 {
+		t.Fatalf("stats = %+v", st)
+	}
+	if n := len(r.up.all()); n != 2 {
+		t.Fatalf("wardryx received %d request(s), want 2", n)
+	}
+}
+
+// With no template configured the proxy asks the starter template, whose
+// egress is the tool, the arguments and the target and nothing else.
+func TestAnUnsetTemplateAsksTheStarterTemplate(t *testing.T) {
+	b := destructive()
+	r := newRig(t, rigOpts{back: b})
+	r.do(t, "POST", "/v1/decide", decideHdr, decideBody(toolCall(`{}`)))
+	if len(b.Asked) != 1 {
+		t.Fatalf("typryx was asked %d time(s), want 1", len(b.Asked))
+	}
+	var egress map[string]json.RawMessage
+	_ = json.Unmarshal(b.Asked[0].Egress.Canonical(), &egress)
+	if len(egress) != 3 || string(egress["tool"]) != `"s3.delete_object"` || string(egress["target"]) != `"s3://prod-backups"` || egress["arguments"] == nil {
+		t.Fatalf("what typryx's backend received: %s", b.Asked[0].Egress.Canonical())
+	}
+}
+
+// A template that is not a choice never becomes a signal: its answer is
+// refused as invalid for this purpose, and the request goes on untouched.
+func TestANonChoiceTemplateNeverGivesASignal(t *testing.T) {
+	r := newRig(t, rigOpts{template: "eval.outcome_met"})
+	body := decideBody(toolCall(`{}`))
+	r.do(t, "POST", "/v1/decide", decideHdr, body)
+	if !bytes.Equal(r.up.last(t).Body, body) {
+		t.Fatalf("a non-choice answer was turned into a signal: %s", r.up.last(t).Body)
+	}
+	if st := r.p.Stats(); st.Signalled != 0 || st.NoSignal[wardryxproxy.ReasonInvalid] != 1 {
+		t.Fatalf("stats = %+v", st)
+	}
+}
+
+// A failed ask is logged once, and only again after typryx has answered.
+func TestAFailingAskIsLoggedOnceUntilTypryxAnswersAgain(t *testing.T) {
+	b := destructive()
+	b.Mode = backendtest.ModeFail
+	r := newRig(t, rigOpts{back: b})
+	body := decideBody(toolCall(`{}`))
+	logged := func() int { return strings.Count(r.logs.String(), "no risk signal added") }
+
+	r.do(t, "POST", "/v1/decide", decideHdr, body)
+	r.do(t, "POST", "/v1/decide", decideHdr, body)
+	if n := logged(); n != 1 {
+		t.Fatalf("two failed asks logged %d line(s), want 1", n)
+	}
+	b.Mode = backendtest.ModeOK
+	r.do(t, "POST", "/v1/decide", decideHdr, body)
+	if st := r.p.Stats(); st.Signalled != 1 {
+		t.Fatalf("typryx answered but no signal was added: %+v", st)
+	}
+	b.Mode = backendtest.ModeFail
+	r.do(t, "POST", "/v1/decide", decideHdr, body)
+	if n := logged(); n != 2 {
+		t.Fatalf("after an answer, a failed ask logged %d line(s) in all, want 2", n)
+	}
+	var failed int64
+	for _, v := range r.p.Stats().NoSignal {
+		failed += v
+	}
+	if failed != 3 {
+		t.Fatalf("failed asks counted %d, want 3", failed)
+	}
+}
+
+// failingTransport answers every request with err, as a dead or slow upstream
+// would.
+type failingTransport struct{ err error }
+
+func (f failingTransport) RoundTrip(*http.Request) (*http.Response, error) { return nil, f.err }
+
+// timeoutErr is a network timeout, the way a dial or a read reports one.
+type timeoutErr struct{}
+
+func (timeoutErr) Error() string   { return "i/o timeout" }
+func (timeoutErr) Timeout() bool   { return true }
+func (timeoutErr) Temporary() bool { return true }
+
+// An upstream timeout is a 502 with the fixed body, counted as a timeout and
+// never as an answer.
+func TestAnUpstreamTimeoutIsA502CountedAsATimeout(t *testing.T) {
+	r := newRig(t, rigOpts{transport: failingTransport{err: timeoutErr{}}})
+	resp, got := r.do(t, "POST", "/v1/decide", decideHdr, decideBody(toolCall(`{}`)))
+	if resp.StatusCode != http.StatusBadGateway || string(got) != `{"error":"the upstream could not be reached"}`+"\n" {
+		t.Fatalf("status %d, body %q", resp.StatusCode, got)
+	}
+	if n := r.p.Stats().NoSignal["upstream_timeout"]; n != 1 {
+		t.Fatalf("upstream_timeout counted %d, want 1", n)
+	}
+}
+
+// The forwarding headers a caller sets are forwarded as sent: the proxy does
+// not rewrite them.
+func TestTheCallersForwardingHeadersReachWardryxAsSent(t *testing.T) {
+	r := newRig(t, rigOpts{})
+	hdr := map[string]string{
+		"X-Forwarded-For":   "10.1.2.3",
+		"X-Forwarded-Host":  "gateway.example",
+		"X-Forwarded-Proto": "https",
+		"Forwarded":         "for=10.1.2.3",
+	}
+	r.do(t, "GET", "/v1/status", hdr, nil)
+	seen := r.up.last(t)
+	for k, v := range hdr {
+		if got := seen.Header.Get(k); got != v {
+			t.Errorf("%s reached wardryx as %q, want %q", k, got, v)
+		}
+	}
+}
+
+// brokenBody is a request body that fails as it is read, as a dropped
+// connection does.
+type brokenBody struct{}
+
+func (brokenBody) Read([]byte) (int, error) { return 0, io.ErrUnexpectedEOF }
+func (brokenBody) Close() error             { return nil }
+
+// A body the proxy cannot read is refused with a 400 before anything reaches
+// wardryx.
+func TestAnUnreadableBodyIsRefusedBeforeAnythingReachesWardryx(t *testing.T) {
+	r := newRig(t, rigOpts{back: destructive()})
+	req := httptest.NewRequest(http.MethodPost, "/v1/decide", brokenBody{})
+	rec := httptest.NewRecorder()
+	r.p.ServeHTTP(rec, req)
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("status %d, want 400", rec.Code)
+	}
+	if n := len(r.up.all()); n != 0 {
+		t.Fatalf("wardryx received %d request(s) for a body the proxy could not read", n)
 	}
 }
