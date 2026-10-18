@@ -683,6 +683,29 @@ in the plan.
     `TestTheProxyRefusesToStartWithoutAnUpstreamOrOnAWideOpenBind` in
     `internal/manifest`, against the real binary)*
 
+43. **The caller's wardryx credential connects to wardryx's address and to no
+    other.** The proxy forwards the caller's `Authorization` header, which is
+    the enforcement point's own key, and does not present a key of its own:
+    wardryx binds the agent a decide names to the key that asks (wardryx
+    #108, e2a04ee), so a key the proxy held would make typryx a principal with
+    enforcement-point rights over the agents of the org (while every key shares
+    one org, wardryx lets an unlisted pep key speak for any agent,
+    `internal/api/auth.go`), reachable by any caller that can reach the proxy.
+    The one thing this invariant adds is
+    where the header can go: the default transport dials the configured
+    upstream's own host and port, through a dialer that refuses any other
+    address, so a request the rewrite or a redirect sent elsewhere cannot carry
+    the header there. Invariant 41 keeps the header out of logs and the journal.
+    `@claude 2026-10-18`: a reading of wardryx's binding and of this proxy, not
+    a decision the owner made; the supervisor confirms it.
+    *(test: `TestTheDefaultTransportDialsOnlyTheConfiguredUpstream` in
+    `internal/wardryxproxy`, red first against the unguarded dialer, with
+    `TestAuthorityFillsTheDefaultPortOfTheScheme` pinning the address the guard
+    compares against; mutants: the guard removed (red), the guard comparing
+    host only (red), the https default port wrong (red), the header stripped
+    before forwarding (caught by `TestAuthorizationIsForwardedAndNeverLoggedOrRecorded`),
+    the header written to the log (caught by the same test))*
+
 @decided 2026-09-30: a customer chooses one of three data modes for typed
 answers (a hosted Jev, their own model on their own hardware, or off). typryx
 does not train or ship models. It offers an opt-in local training log, off by

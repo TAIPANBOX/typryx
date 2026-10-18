@@ -13,7 +13,7 @@ and recorded.
 ![Go 1.27](https://img.shields.io/badge/Go-1.27-4493f8)
 ![one direct dependency](https://img.shields.io/badge/direct%20dependency-one-2dd4bf)
 ![license Apache 2.0](https://img.shields.io/badge/license-Apache--2.0-9aa7b8)
-![tests](https://img.shields.io/badge/tests-996-brightgreen)
+![tests](https://img.shields.io/badge/tests-998-brightgreen)
 
 </div>
 
@@ -283,7 +283,10 @@ tokenfuse MCP broker  ->  typryx wardryx-proxy  ->  wardryx
 ```
 
 It forwards every request to wardryx unchanged: method, path, query, headers (the
-`Authorization` header included) and body, and the response comes back untouched. The one
+`Authorization` header included) and body, and the response comes back untouched. The
+`Authorization` header is the caller's own key, the enforcement point's, which wardryx needs to
+bind the agent it is asked about to that caller; the proxy keeps no key of its own, and its
+transport connects to wardryx's address and to no other (CLAUDE.md invariant 43). The one
 exception is `POST /v1/decide` whose JSON body carries a `tool_call` with a `name` and whose
 `arguments_truncated` is not true. For that, typryx is asked, in the proxy's own process and
 through the same service layer `typryx serve` runs (so the template's egress filter, the
@@ -947,7 +950,7 @@ govulncheck ./...
 
 `gosec` and `govulncheck` also run in CI's `security` job; CLAUDE.md asks for them before every push.
 
-443 tests. That is the number of `func Test` functions in the suite. The badge's 996
+445 tests. That is the number of `func Test` functions in the suite. The badge's 998
 counts every `=== RUN` line, subtests included, and `scripts/readme-numbers.sh` measures
 both and fails if either stated number drifts. `go test ./... -race` covers every package;
 `internal/manifest` builds and starts the real binary to prove `components.json` against

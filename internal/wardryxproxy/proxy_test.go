@@ -2,6 +2,7 @@ package wardryxproxy_test
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -786,6 +787,35 @@ func TestARedirectIsPassedOnAndNothingElseIsDialled(t *testing.T) {
 	if hits != 0 {
 		t.Fatalf("the redirect target was dialled %d time(s)", hits)
 	}
+}
+
+// The default transport connects to the configured upstream and to nothing else.
+// A caller's Authorization rides on every request, so an address other than
+// wardryx's must be refused at the dialer, not left to the rewrite to get right.
+func TestTheDefaultTransportDialsOnlyTheConfiguredUpstream(t *testing.T) {
+	up := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {}))
+	defer up.Close()
+	other := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {}))
+	defer other.Close()
+	u, err := url.Parse(up.URL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	p := wardryxproxy.New(wardryxproxy.Config{Upstream: u})
+	tr, ok := p.Transport.(*http.Transport)
+	if !ok {
+		t.Fatalf("the default transport is %T, not an *http.Transport", p.Transport)
+	}
+	ctx := context.Background()
+	if conn, err := tr.DialContext(ctx, "tcp", strings.TrimPrefix(other.URL, "http://")); err == nil {
+		_ = conn.Close()
+		t.Fatal("the default transport connected to an address other than the configured upstream")
+	}
+	conn, err := tr.DialContext(ctx, "tcp", u.Host)
+	if err != nil {
+		t.Fatalf("the configured upstream was not reachable through the default transport: %v", err)
+	}
+	_ = conn.Close()
 }
 
 // --- the proxy's own paths ---
