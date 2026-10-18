@@ -697,9 +697,11 @@ in the plan.
     `@claude 2026-10-18`: a reading of wardryx's binding and of this proxy, not
     a decision the owner made; the supervisor confirms it.
     *(test: `TestTheDefaultTransportDialsOnlyTheConfiguredUpstream` in
-    `internal/wardryxproxy`, red first against the unguarded dialer; mutants:
-    the guard removed (red), the guard comparing host only (red), the header
-    stripped before forwarding (caught by `TestAuthorizationIsForwardedAndNeverLoggedOrRecorded`),
+    `internal/wardryxproxy`, red first against the unguarded dialer, with
+    `TestAuthorityFillsTheDefaultPortOfTheScheme` pinning the address the guard
+    compares against; mutants: the guard removed (red), the guard comparing
+    host only (red), the https default port wrong (red), the header stripped
+    before forwarding (caught by `TestAuthorizationIsForwardedAndNeverLoggedOrRecorded`),
     the header written to the log (caught by the same test))*
 
 @decided 2026-09-30: a customer chooses one of three data modes for typed
