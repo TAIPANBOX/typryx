@@ -687,9 +687,11 @@ in the plan.
     other.** The proxy forwards the caller's `Authorization` header, which is
     the enforcement point's own key, and does not present a key of its own:
     wardryx binds the agent a decide names to the key that asks (wardryx
-    #108, e2a04ee), so a key the proxy held would make typryx a principal
-    with enforcement-point rights over every agent its callers name, reachable
-    by any caller that can reach the proxy. The one thing this invariant adds is
+    #108, e2a04ee), so a key the proxy held would make typryx a principal with
+    enforcement-point rights over the agents of the org (while every key shares
+    one org, wardryx lets an unlisted pep key speak for any agent,
+    `internal/api/auth.go`), reachable by any caller that can reach the proxy.
+    The one thing this invariant adds is
     where the header can go: the default transport dials the configured
     upstream's own host and port, through a dialer that refuses any other
     address, so a request the rewrite or a redirect sent elsewhere cannot carry
