@@ -544,6 +544,12 @@ Feature: Typed answers, as an option a customer adds to the stack
     Then wardryx receives the Authorization header and never typryx's credential
     And neither a credential nor the tool arguments reach the log or the journal
 
+  # @test:TestTheDefaultTransportDialsOnlyTheConfiguredUpstream
+  Scenario: The caller's wardryx credential never connects to any address but wardryx's
+    Given the proxy's own transport, and an address that is not wardryx's
+    When the transport is asked to connect to that other address
+    Then the connection is refused, and wardryx's own address is still reachable
+
   # @test:TestWardryxBeingDownIsA502NotAnAnswer
   Scenario: A wardryx that cannot be reached is a 502, so the caller's own fail mode decides
     Given a wardryx that is down

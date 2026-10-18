@@ -137,10 +137,12 @@ func New(c Config) *Proxy {
 	}
 	if out.Transport == nil {
 		out.Transport = &http.Transport{
-			// No environment proxy: a caller's Authorization goes to the
-			// upstream it was configured for and nowhere else.
+			// No environment proxy, and a dialer that connects to the upstream
+			// and nowhere else: a caller's Authorization goes to the upstream it
+			// was configured for even if a later change to the rewrite below
+			// pointed a request somewhere new.
 			Proxy:                 nil,
-			DialContext:           (&net.Dialer{Timeout: 5 * time.Second}).DialContext,
+			DialContext:           upstreamOnly(c.Upstream),
 			ResponseHeaderTimeout: 30 * time.Second,
 			MaxIdleConnsPerHost:   16,
 			IdleConnTimeout:       60 * time.Second,
@@ -175,8 +177,9 @@ func New(c Config) *Proxy {
 		},
 		ErrorLog: nil,
 	}
-	// httputil logs through the standard logger when ErrorLog is nil, but only
-	// from the default error handler, which is replaced above.
+	// ReverseProxy's own failure messages go through the standard logger, since
+	// ErrorLog is nil. They carry the transport's error text, which names no
+	// request header, so no credential can be in them.
 	return out
 }
 
@@ -417,4 +420,39 @@ func (p *Proxy) Stats() Stats {
 		by[k] = v
 	}
 	return Stats{Asked: p.asked.Load(), Signalled: p.signalled.Load(), NoSignal: by}
+}
+
+// errNotTheUpstream is what the default transport answers for an address other
+// than the configured upstream's.
+var errNotTheUpstream = errors.New("the proxy connects only to its configured upstream")
+
+// upstreamOnly returns the dialer of the default transport: it connects to the
+// configured upstream's own host and port and to nothing else. The reverse proxy
+// already rewrites every request to that host, so this is a second lock on the
+// same fact, which holds even if the rewrite ever stops doing its job.
+func upstreamOnly(upstream *url.URL) func(context.Context, string, string) (net.Conn, error) {
+	dialer := &net.Dialer{Timeout: 5 * time.Second}
+	want := ""
+	if upstream != nil {
+		want = authority(upstream)
+	}
+	return func(ctx context.Context, network, addr string) (net.Conn, error) {
+		if want == "" || !strings.EqualFold(addr, want) {
+			return nil, errNotTheUpstream
+		}
+		return dialer.DialContext(ctx, network, addr)
+	}
+}
+
+// authority is the host:port a transport dials for u, with the default port of
+// its scheme filled in.
+func authority(u *url.URL) string {
+	port := u.Port()
+	if port == "" {
+		port = "80"
+		if u.Scheme == "https" {
+			port = "443"
+		}
+	}
+	return net.JoinHostPort(u.Hostname(), port)
 }
