@@ -64,7 +64,7 @@ No claim here is about how fast, cheap, or accurate any vendor's model is; see
 With Go 1.27:
 
 ```sh
-go install github.com/TAIPANBOX/typryx/cmd/typryx@v0.4.1
+go install github.com/TAIPANBOX/typryx/cmd/typryx@v0.5.0
 ```
 
 Or from a clone, which also gives you the example templates:
@@ -81,7 +81,7 @@ digest with keyless cosign, build provenance attested; no `latest` tag, pin the 
 ```sh
 docker run --rm -p 4320:4320 \
   -e TYPRYX_BACKEND=stub -e TYPRYX_KEYS='k1=agent://demo.example/tester' \
-  ghcr.io/taipanbox/typryx:v0.4.1
+  ghcr.io/taipanbox/typryx:v0.5.0
 ```
 
 Measured 2026-10-14, pulled on a development Mac (Apple Silicon): the published `v0.4.1`
