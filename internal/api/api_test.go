@@ -14,7 +14,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/TAIPANBOX/agent-stack-go/event"
+	"github.com/TAIPANBOX/agent-stack-go/v2/event"
 	"github.com/TAIPANBOX/typryx/internal/api"
 	"github.com/TAIPANBOX/typryx/internal/backend"
 	"github.com/TAIPANBOX/typryx/internal/door"

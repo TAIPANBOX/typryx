@@ -14,7 +14,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/TAIPANBOX/agent-stack-go/event"
+	"github.com/TAIPANBOX/agent-stack-go/v2/event"
 )
 
 // Schema and source, per agent-passport SPEC 6.
