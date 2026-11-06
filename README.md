@@ -411,6 +411,55 @@ from what this section already describes. The `eval.answer_quality` and
 `request.complexity` rows above look sound on this small, informal sample, but six asks
 prove nothing about calibration; see NOT PROVEN.
 
+### OpenAI's current models
+
+OpenAI retires `gpt-4.1-mini` and `gpt-4o-mini` on 2027-01-14 and shut `gpt-4.1-nano` down
+on 2026-10-23. The models it names to replace them refuse the default request, so they
+take three more variables:
+
+```sh
+TYPRYX_OPENAI_URL=https://api.openai.com/v1
+TYPRYX_OPENAI_MODEL=gpt-6-luna
+TYPRYX_OPENAI_TOP_LOGPROBS=5
+TYPRYX_OPENAI_MAX_COMPLETION_TOKENS=16
+TYPRYX_OPENAI_REASONING_EFFORT=none
+```
+
+Each one answers a refusal read off the live API on 2026-11-06, one parameter changed at
+a time, the same on `gpt-6-luna`, `gpt-5.6-luna`, `gpt-6-sol` and `gpt-5.6-sol`:
+
+| the default request | what the model says | what to set |
+|---|---|---|
+| `max_tokens: 1` | `'max_tokens' is not supported with this model` | `TYPRYX_OPENAI_MAX_COMPLETION_TOKENS=16`; a budget of 1 fails too, with `Could not finish the message` |
+| `top_logprobs: 20` | `must be less than or equal to 5` | `TYPRYX_OPENAI_TOP_LOGPROBS=5` |
+| no `reasoning_effort` | `'logprobs' is not supported with this model` | `TYPRYX_OPENAI_REASONING_EFFORT=none` |
+
+Leave all three unset for a local server or an older hosted model. The request then stays
+byte for byte what it always was, which `scripts/request-shape.sh` holds, and it has to:
+`gpt-4.1-mini` refuses `reasoning_effort` by name. `temperature: 0` stays in every request,
+because all four models accept it. `gpt-6.1-sol` cannot be reached by this backend: it
+refuses `reasoning_effort: none`, and at any other setting it refuses `logprobs`.
+
+Four things read differently on these models:
+
+- **The reply is still one letter, billed as four tokens.** `usage` reports 4 completion
+  tokens where `logprobs.content` holds one. Only the first token is ever read, so a
+  letter written after prose is not an answer: that reply is `label_mass_too_low`.
+- **They list fewer alternatives than they are asked for, often only the letter they
+  chose.** The other letter then reads exactly 0 and the listed one 1, even where the
+  listed token's own probability is 0.98. A lone letter below
+  `TYPRYX_OPENAI_MIN_LABEL_MASS` is `label_mass_too_low`, since the rest of the mass is not
+  in the list.
+- **They report in steps of 2^-18,** so a near-certain token can come back a few steps
+  above zero: `+0.0000152587890625` was read on `gpt-5.6-luna`. Up to 0.001 counts as that
+  rounding and not as a broken distribution.
+- **The same question does not come back with the same number.** Eight asks of one answer
+  on `gpt-6-luna` read from 0.78 to 1.00, at temperature 0 and with no temperature sent
+  alike, so two runs of a calibration differ by a few items.
+
+The calibration numbers for these models are in [Current OpenAI models, measured
+2026-11-06](#current-openai-models-measured-2026-11-06).
+
 ### Spend through a metering gateway, priced, and capped per day
 
 `TYPRYX_OPENAI_URL` can point at any OpenAI-compatible endpoint, including a metering
@@ -665,13 +714,46 @@ Three things this shows, each read off the ledgers rather than assumed:
   checking anything that needs working out. Typed-decision models such as Jev are
   built for exactly the second kind; this is the comparison that matters once there
   is access (signups were paused on 2026-09-25).
-- **Current hosted models do not expose token probabilities at all.** gpt-5.x and
-  gpt-6 answer `'logprobs' is not supported with this model` (probed 2026-09-25), so
-  this backend reaches only earlier hosted models and open models. It does not reach
-  Anthropic's API either, which, as far as this repository knows, returns no logprobs.
+- **Current hosted models report token probabilities only with reasoning switched off.**
+  gpt-5.x and gpt-6 answered `'logprobs' is not supported with this model` on 2026-09-25,
+  to a request that sent no `reasoning_effort`; at `reasoning_effort: none` four of them
+  report them (measured below). This backend does not reach Anthropic's API, which, as
+  far as this repository knows, returns no logprobs.
 
 Cost of all six hosted runs together: under one US cent (about 360 calls of about 200
 input tokens and 1 output token each).
+
+### Current OpenAI models, measured 2026-11-06
+
+The same 60 items (seed 1) and the same template (v1, `2d3ecbdc`), through this backend
+with nothing in between: the [three variables](#openais-current-models) for the current
+models, none of them for `gpt-4.1-mini`. Every run answered 60 of 60.
+
+| model | run | accuracy | mean confidence | overconfidence | Brier | ECE |
+|---|---|---|---|---|---|---|
+| gpt-6-luna | 1 | 0.717 | 0.960 | 0.243 | 0.498 | 0.256 |
+| gpt-6-luna | 2 | 0.733 | 0.976 | 0.242 | 0.507 | 0.268 |
+| gpt-6-luna | 3 | 0.717 | 0.978 | 0.262 | 0.526 | 0.274 |
+| gpt-5.6-luna | 1 | 0.650 | 0.967 | 0.317 | 0.682 | 0.329 |
+| gpt-5.6-luna | 2 | 0.617 | 0.980 | 0.363 | 0.758 | 0.380 |
+| gpt-5.6-luna | 3 | 0.600 | 0.984 | 0.384 | 0.779 | 0.393 |
+| gpt-6-sol | 1 | 1.000 | 1.000 | 0.000 | 0.000 | 0.000 |
+| gpt-5.6-sol | 1 | 1.000 | 1.000 | 0.000 | 0.000 | 0.000 |
+| gpt-4.1-mini-2025-04-14 | 1 | 0.750 | 0.984 | 0.234 | 0.506 | 0.263 |
+
+- **The luna models fail the way the models they replace fail.** `gpt-6-luna` passed 16 or
+  17 of the 30 wrong answers and failed none of the right ones, `gpt-5.6-luna` passed 19 or
+  20 and failed 2 to 4, at a mean confidence of 0.96 and above, and `gpt-4.1-mini` passed 13
+  and failed 2 at 0.984.
+- **The sol models got all 60 right in one letter.** So the 2026-09-25 reading above, that
+  one token leaves no room for working something out, holds for the models it was measured
+  on and not for every model. These are arithmetic items up to 19 x 19.
+- **A run is one draw.** Three runs of a model differ by a few items and about 0.02 of mean
+  confidence, so a difference that size between two runs says nothing.
+- **A bound can decide the score.** At the old 1e-6 logprob bound, 13 of 60 answers on
+  `gpt-5.6-luna` were thrown away as `bad_logprobs`, and the 47 left read 0.532. Ten of the
+  13 were items whose answer was right, so the model looked worse than it is by losing the
+  answers it was surest of.
 
 ### How fast is a typed decision, measured (2026-09-25)
 
