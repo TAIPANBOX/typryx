@@ -158,6 +158,11 @@ type openaiBackendConfig struct {
 	defaultRunID       string
 	priceInputPerMTok  float64
 	priceOutputPerMTok float64
+	// topLogProbs, maxCompletionTokens and reasoningEffort shape the request
+	// and nothing else; see backend.OpenAIConfig for what each one sends.
+	topLogProbs         int
+	maxCompletionTokens int
+	reasoningEffort     string
 }
 
 // isUnpriced reports whether this backend config's own prices would leave

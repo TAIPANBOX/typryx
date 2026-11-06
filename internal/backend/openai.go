@@ -32,10 +32,11 @@ const maxResponseBytes = 1 << 20 // 1 MiB
 // alone, not by the template, since another backend may still take it.
 const maxLetterLabels = 26
 
-// requestTopLogProbs is how many alternatives are requested per token. Fixed,
-// not configurable: raising it only ever helps label_mass, and a caller that
-// wants a different bound tunes TYPRYX_OPENAI_MIN_LABEL_MASS instead.
-const requestTopLogProbs = 20
+// MaxTopLogProbs is how many alternatives are requested per token when
+// nothing says otherwise, and the most an OpenAI-compatible server is asked
+// for: raising it only ever helps label_mass, so the default stays at the top
+// of the range and comes down only for a server that refuses it.
+const MaxTopLogProbs = 20
 
 // OpenAIConfig configures the openai-logprobs backend.
 type OpenAIConfig struct {
@@ -67,6 +68,21 @@ type OpenAIConfig struct {
 	// Validated the same way a caller-supplied run_id is (door.ValidRunID),
 	// by cmd/typryx before this config is ever built.
 	DefaultRunID string
+	// TopLogProbs is how many alternatives are requested per token
+	// (TYPRYX_OPENAI_TOP_LOGPROBS). <= 0 defaults to MaxTopLogProbs. OpenAI's
+	// current models refuse anything above 5.
+	TopLogProbs int
+	// MaxCompletionTokens, when positive, replaces "max_tokens": 1 with
+	// "max_completion_tokens": N (TYPRYX_OPENAI_MAX_COMPLETION_TOKENS). OpenAI's
+	// current models refuse max_tokens by name and cannot finish a message
+	// inside one token; the answer is still one letter, and only the first
+	// token's top_logprobs is ever read. Zero keeps max_tokens: 1.
+	MaxCompletionTokens int
+	// ReasoningEffort, when non-empty, is sent as "reasoning_effort"
+	// (TYPRYX_OPENAI_REASONING_EFFORT). OpenAI's current models report
+	// logprobs only at "none". Empty sends no such field at all, which is what
+	// an older server needs: gpt-4.1-mini refuses the field by name.
+	ReasoningEffort string
 	// PriceInputPerMTok and PriceOutputPerMTok are USD per million tokens,
 	// used only to compute Usage.CostUSD. Zero (the default, and the zero
 	// value of this struct) means unpriced: cost_usd is always 0. Neither is
@@ -156,7 +172,7 @@ func (o *OpenAI) Ask(ctx context.Context, q Question, eg template.Egress) (Answe
 		MaxTokens:   1,
 		Temperature: 0,
 		LogProbs:    true,
-		TopLogProbs: requestTopLogProbs,
+		TopLogProbs: MaxTopLogProbs,
 	}
 	reqJSON, err := json.Marshal(reqBody)
 	if err != nil {

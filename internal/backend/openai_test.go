@@ -890,3 +890,220 @@ func TestOpenAICostIsZeroWhenNoPriceIsConfigured(t *testing.T) {
 		t.Errorf("CostUSD = %v, want 0 when unpriced", usage.CostUSD)
 	}
 }
+
+// --- the request an older server and a current model each accept ------------
+
+// currentModelServer answers the way OpenAI's current models answered on
+// 2026-11-06 (gpt-6-luna, gpt-5.6-luna, gpt-6-sol and gpt-5.6-sol alike): each
+// refusal below, and the order they fire in, was read off the live API, one
+// parameter changed at a time. Whatever passes all four gets ok.
+func currentModelServer(t *testing.T, ok []byte) *jsonServer {
+	t.Helper()
+	js := &jsonServer{}
+	refuse := func(w http.ResponseWriter, message, param, code string) {
+		w.WriteHeader(http.StatusBadRequest)
+		_ = json.NewEncoder(w).Encode(map[string]any{"error": map[string]any{
+			"message": message, "type": "invalid_request_error", "param": param, "code": code,
+		}})
+	}
+	js.Server = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		js.requests.Add(1)
+		js.lastBody, _ = io.ReadAll(r.Body)
+		var got struct {
+			MaxTokens           *int   `json:"max_tokens"`
+			MaxCompletionTokens *int   `json:"max_completion_tokens"`
+			ReasoningEffort     string `json:"reasoning_effort"`
+			TopLogProbs         int    `json:"top_logprobs"`
+		}
+		if err := json.Unmarshal(js.lastBody, &got); err != nil {
+			t.Errorf("the backend sent a body that is not JSON: %v", err)
+		}
+		switch {
+		case got.MaxTokens != nil:
+			refuse(w, "'max_tokens' is not supported with this model.", "max_tokens", "unsupported_parameter")
+		case got.ReasoningEffort != "none":
+			refuse(w, "'logprobs' is not supported with this model.", "logprobs", "unsupported_parameter")
+		case got.TopLogProbs > 5:
+			refuse(w, "'top_logprobs': must be less than or equal to 5.", "top_logprobs", "")
+		case got.MaxCompletionTokens != nil && *got.MaxCompletionTokens < 2:
+			refuse(w, "Could not finish the message because max_tokens or model output limit was reached.", "", "")
+		default:
+			_, _ = w.Write(ok)
+		}
+	}))
+	t.Cleanup(js.Close)
+	return js
+}
+
+func currentModelBackend(baseURL string) *OpenAI {
+	return NewOpenAI(OpenAIConfig{
+		BaseURL: baseURL + "/v1", Model: "gpt-6-luna", Logger: testLogger(nil),
+		TopLogProbs: 5, MaxCompletionTokens: 16, ReasoningEffort: "none",
+	})
+}
+
+// sentFields decodes a captured request into its top-level fields, so a test
+// can say a field is absent, which a struct with a zero value cannot.
+func sentFields(t *testing.T, body []byte) map[string]json.RawMessage {
+	t.Helper()
+	var fields map[string]json.RawMessage
+	if err := json.Unmarshal(body, &fields); err != nil {
+		t.Fatalf("decoding the captured request body: %v\n%s", err, body)
+	}
+	return fields
+}
+
+// A deployment that set none of the request variables sends the request it
+// has always sent, byte for byte: the struct below is that request written
+// down apart from chatRequest, so changing the wire shape cannot change the
+// thing it is compared against.
+func TestNothingConfiguredSendsTheRequestAnOlderServerAlreadyAccepts(t *testing.T) {
+	q := noulQuestion("it worked", "it did not")
+	srv := newJSONServer(t, 200, nil, noulOKBody(t, "m"))
+	o := newBackend(t, srv.URL, "", testLogger(nil))
+
+	if _, _, err := o.Ask(context.Background(), q, template.Egress{}); err != nil {
+		t.Fatalf("Ask: %v", err)
+	}
+
+	labels, err := labelsFor(q)
+	if err != nil {
+		t.Fatalf("labelsFor: %v", err)
+	}
+	system, user := buildPrompt(q, labels, template.Egress{})
+	want, err := json.Marshal(struct {
+		Model    string `json:"model"`
+		Messages []struct {
+			Role    string `json:"role"`
+			Content string `json:"content"`
+		} `json:"messages"`
+		MaxTokens   int     `json:"max_tokens"`
+		Temperature float64 `json:"temperature"`
+		LogProbs    bool    `json:"logprobs"`
+		TopLogProbs int     `json:"top_logprobs"`
+	}{
+		Model: "qwen2.5:3b",
+		Messages: []struct {
+			Role    string `json:"role"`
+			Content string `json:"content"`
+		}{{"system", system}, {"user", user}},
+		MaxTokens: 1, Temperature: 0, LogProbs: true, TopLogProbs: 20,
+	})
+	if err != nil {
+		t.Fatalf("marshaling the expected request: %v", err)
+	}
+	if !bytes.Equal(srv.lastBody, want) {
+		t.Errorf("the default request changed\n got: %s\nwant: %s", srv.lastBody, want)
+	}
+}
+
+func TestACurrentModelIsAskedTheWayItAccepts(t *testing.T) {
+	q := noulQuestion("it worked", "it did not")
+	srv := currentModelServer(t, fakeResponseBody(t, "gpt-6-luna", []tlp{
+		{Token: "A", LogProb: math.Log(0.8)}, {Token: "B", LogProb: math.Log(0.2)},
+	}, nil))
+
+	ans, _, err := currentModelBackend(srv.URL).Ask(context.Background(), q, template.Egress{})
+	if err != nil {
+		t.Fatalf("Ask: %v (request: %s)", err, srv.lastBody)
+	}
+	if got := ans.Probabilities["true"]; math.Abs(got-0.8) > 1e-9 {
+		t.Errorf("probability of true = %v, want 0.8 from the server's own logprobs", got)
+	}
+
+	sent := sentFields(t, srv.lastBody)
+	for field, want := range map[string]string{
+		"max_completion_tokens": "16",
+		"reasoning_effort":      `"none"`,
+		"top_logprobs":          "5",
+		"temperature":           "0",
+		"logprobs":              "true",
+	} {
+		if got := string(sent[field]); got != want {
+			t.Errorf("%s = %s, want %s", field, got, want)
+		}
+	}
+	if _, present := sent["max_tokens"]; present {
+		t.Errorf("max_tokens must not be sent beside max_completion_tokens: %s", srv.lastBody)
+	}
+}
+
+// Each request setting moves its own field and no other, because the three are
+// separate facts about a server: gpt-4.1-mini takes max_completion_tokens and
+// refuses reasoning_effort, for one.
+func TestEachRequestSettingMovesOnlyItsOwnField(t *testing.T) {
+	cases := []struct {
+		name string
+		cfg  OpenAIConfig
+		want map[string]string
+	}{
+		{"top_logprobs alone", OpenAIConfig{TopLogProbs: 5},
+			map[string]string{"max_tokens": "1", "top_logprobs": "5"}},
+		{"max_completion_tokens alone", OpenAIConfig{MaxCompletionTokens: 16},
+			map[string]string{"max_completion_tokens": "16", "top_logprobs": "20"}},
+		{"reasoning_effort alone", OpenAIConfig{ReasoningEffort: "low"},
+			map[string]string{"max_tokens": "1", "reasoning_effort": `"low"`, "top_logprobs": "20"}},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			srv := newJSONServer(t, 200, nil, noulOKBody(t, "m"))
+			c.cfg.BaseURL, c.cfg.Model, c.cfg.Logger = srv.URL+"/v1", "m", testLogger(nil)
+			if _, _, err := NewOpenAI(c.cfg).Ask(context.Background(), noulQuestion("a", "b"), template.Egress{}); err != nil {
+				t.Fatalf("Ask: %v", err)
+			}
+			sent := sentFields(t, srv.lastBody)
+			for _, field := range []string{"max_tokens", "max_completion_tokens", "reasoning_effort", "top_logprobs"} {
+				if got, want := string(sent[field]), c.want[field]; got != want {
+					t.Errorf("%s = %q, want %q", field, got, want)
+				}
+			}
+		})
+	}
+}
+
+// With a budget above one token a model may write more than the letter, so
+// this is where "only the first token counts" stops being guaranteed by
+// max_tokens: 1 and has to hold by itself. A letter later in the message is
+// the model's prose, and prose is never read.
+func TestOnlyTheFirstTokenIsReadWhenTheModelWritesMore(t *testing.T) {
+	reply := func(first, second []tlp) []byte {
+		b, err := json.Marshal(map[string]any{
+			"model": "gpt-6-luna",
+			"choices": []any{map[string]any{"logprobs": map[string]any{"content": []any{
+				map[string]any{"token": "x", "logprob": -0.01, "top_logprobs": first},
+				map[string]any{"token": "y", "logprob": -0.01, "top_logprobs": second},
+			}}}},
+		})
+		if err != nil {
+			t.Fatalf("marshaling the reply: %v", err)
+		}
+		return b
+	}
+	q := noulQuestion("it worked", "it did not")
+
+	t.Run("the letter comes first", func(t *testing.T) {
+		srv := currentModelServer(t, reply(
+			[]tlp{{Token: "A", LogProb: math.Log(0.3)}, {Token: "B", LogProb: math.Log(0.7)}},
+			[]tlp{{Token: "A", LogProb: 0}},
+		))
+		ans, _, err := currentModelBackend(srv.URL).Ask(context.Background(), q, template.Egress{})
+		if err != nil {
+			t.Fatalf("Ask: %v (request: %s)", err, srv.lastBody)
+		}
+		if got := ans.Probabilities["true"]; math.Abs(got-0.3) > 1e-9 {
+			t.Errorf("probability of true = %v, want 0.3 from the first token alone", got)
+		}
+	})
+
+	t.Run("prose comes first and the letter after it", func(t *testing.T) {
+		srv := currentModelServer(t, reply(
+			[]tlp{{Token: "The", LogProb: math.Log(0.95)}, {Token: "A", LogProb: math.Log(0.02)}},
+			[]tlp{{Token: "A", LogProb: 0}},
+		))
+		_, _, err := currentModelBackend(srv.URL).Ask(context.Background(), q, template.Egress{})
+		var un *UnansweredError
+		if !aserr(err, &un) || un.Reason != "label_mass_too_low" {
+			t.Fatalf("expected label_mass_too_low, got %v (requests: %d)", err, srv.requests.Load())
+		}
+	})
+}

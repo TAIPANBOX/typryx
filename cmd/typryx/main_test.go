@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"io"
 	"log/slog"
@@ -13,6 +14,9 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/TAIPANBOX/typryx/internal/backend"
+	"github.com/TAIPANBOX/typryx/internal/template"
 )
 
 func TestEnvOr(t *testing.T) {
@@ -482,6 +486,135 @@ func TestBuildRuntimeWiresOpenAIMeterHeadersPricesAndRunID(t *testing.T) {
 	defer rt.journal.Close()
 	if rt.server == nil {
 		t.Fatal("expected a server")
+	}
+}
+
+// --- TYPRYX_OPENAI_TOP_LOGPROBS / _MAX_COMPLETION_TOKENS / _REASONING_EFFORT --
+
+func TestLoadConfigLeavesTheOpenAIRequestAsItWasWhenNothingIsSet(t *testing.T) {
+	clearTyprxEnv(t)
+	setEnv(t, openAIWorkingEnv(t, ""))
+	cfg, err := loadConfig()
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if cfg.openai.topLogProbs != 20 {
+		t.Errorf("expected top_logprobs to default to 20, got %d", cfg.openai.topLogProbs)
+	}
+	if cfg.openai.maxCompletionTokens != 0 {
+		t.Errorf("expected no max_completion_tokens by default, got %d", cfg.openai.maxCompletionTokens)
+	}
+	if cfg.openai.reasoningEffort != "" {
+		t.Errorf("expected no reasoning_effort by default, got %q", cfg.openai.reasoningEffort)
+	}
+}
+
+func TestLoadConfigAcceptsTheRequestSettingsACurrentModelNeeds(t *testing.T) {
+	clearTyprxEnv(t)
+	env := openAIWorkingEnv(t, "")
+	env["TYPRYX_OPENAI_TOP_LOGPROBS"] = "5"
+	env["TYPRYX_OPENAI_MAX_COMPLETION_TOKENS"] = "16"
+	env["TYPRYX_OPENAI_REASONING_EFFORT"] = "none"
+	setEnv(t, env)
+	cfg, err := loadConfig()
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if cfg.openai.topLogProbs != 5 || cfg.openai.maxCompletionTokens != 16 || cfg.openai.reasoningEffort != "none" {
+		t.Errorf("unexpected settings: top=%d max=%d effort=%q",
+			cfg.openai.topLogProbs, cfg.openai.maxCompletionTokens, cfg.openai.reasoningEffort)
+	}
+}
+
+func TestLoadConfigAcceptsTheEdgesOfEachOpenAIRequestRange(t *testing.T) {
+	for name, values := range map[string][]string{
+		"TYPRYX_OPENAI_TOP_LOGPROBS":          {"1", "20"},
+		"TYPRYX_OPENAI_MAX_COMPLETION_TOKENS": {"1", "256"},
+		"TYPRYX_OPENAI_REASONING_EFFORT":      {"a", strings.Repeat("a", 32)},
+	} {
+		for _, v := range values {
+			t.Run(name+"="+v, func(t *testing.T) {
+				clearTyprxEnv(t)
+				env := openAIWorkingEnv(t, "")
+				env[name] = v
+				setEnv(t, env)
+				if _, err := loadConfig(); err != nil {
+					t.Fatalf("expected %s=%s to be accepted, got %v", name, v, err)
+				}
+			})
+		}
+	}
+}
+
+// A value a server would refuse on every ask is refused once, at start, by
+// name: the alternative is a deployment that looks up and answers nothing.
+func TestLoadConfigRefusesABadOpenAIRequestSetting(t *testing.T) {
+	for name, values := range map[string][]string{
+		"TYPRYX_OPENAI_TOP_LOGPROBS":          {"0", "21", "-1", "abc", "1.5", " 5", "5 ", "99999999999999999999"},
+		"TYPRYX_OPENAI_MAX_COMPLETION_TOKENS": {"0", "257", "-1", "abc", "1.5", " 16", "99999999999999999999"},
+		"TYPRYX_OPENAI_REASONING_EFFORT":      {"NONE", "no ne", "none\n", "none\"", "nöne", "1", strings.Repeat("a", 33)},
+	} {
+		for _, v := range values {
+			t.Run(name+"="+v, func(t *testing.T) {
+				clearTyprxEnv(t)
+				env := openAIWorkingEnv(t, "")
+				env[name] = v
+				setEnv(t, env)
+				_, err := loadConfig()
+				if err == nil || !strings.Contains(err.Error(), name) {
+					t.Fatalf("expected an error naming %s for %q, got %v", name, v, err)
+				}
+			})
+		}
+	}
+}
+
+// The seam: loadConfig reading a variable and the backend honouring a field
+// are each tested on their own, and neither notices a field dropped between
+// them, in buildService. This asks through the backend the service was
+// actually given and reads what reached the wire.
+func TestTheOpenAIRequestSettingsReachTheWire(t *testing.T) {
+	var sent map[string]json.RawMessage
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if err := json.NewDecoder(r.Body).Decode(&sent); err != nil {
+			t.Errorf("decoding the request: %v", err)
+		}
+		_, _ = w.Write([]byte(`{"choices":[{"logprobs":{"content":[{"top_logprobs":[{"token":"A","logprob":-0.01}]}]}}]}`))
+	}))
+	defer srv.Close()
+
+	clearTyprxEnv(t)
+	env := openAIWorkingEnv(t, "")
+	env["TYPRYX_OPENAI_URL"] = srv.URL + "/v1"
+	env["TYPRYX_OPENAI_TOP_LOGPROBS"] = "5"
+	env["TYPRYX_OPENAI_MAX_COMPLETION_TOKENS"] = "16"
+	env["TYPRYX_OPENAI_REASONING_EFFORT"] = "none"
+	setEnv(t, env)
+	cfg, err := loadConfig()
+	if err != nil {
+		t.Fatalf("loadConfig: %v", err)
+	}
+	svc, rt, err := buildService(cfg, testLogger())
+	if err != nil {
+		t.Fatalf("buildService: %v", err)
+	}
+	defer rt.journal.Close()
+
+	q := backend.Question{Key: "t", Type: template.TypeNoul, Instructions: "is it true"}
+	if _, _, err := svc.Backend.Ask(context.Background(), q, template.Egress{}); err != nil {
+		t.Fatalf("Ask: %v", err)
+	}
+	for field, want := range map[string]string{
+		"top_logprobs":          "5",
+		"max_completion_tokens": "16",
+		"reasoning_effort":      `"none"`,
+	} {
+		if got := string(sent[field]); got != want {
+			t.Errorf("%s = %s, want %s", field, got, want)
+		}
+	}
+	if _, present := sent["max_tokens"]; present {
+		t.Error("max_tokens must not be sent beside max_completion_tokens")
 	}
 }
 
