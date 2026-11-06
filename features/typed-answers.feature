@@ -145,6 +145,56 @@ Feature: Typed answers, as an option a customer adds to the stack
     Then the result is unanswered, with a reason
     And the little probability mass that did land on an option is never stretched to sum to one anyway
 
+  # OpenAI is retiring the models this backend could reach, and the models that
+  # replace them refuse its request. What each one accepts was read off the live
+  # API on 2026-11-06, one parameter changed at a time.
+
+  # @test:TestNothingConfiguredSendsTheRequestAnOlderServerAlreadyAccepts
+  Scenario: A deployment that changed nothing keeps sending the request it always sent
+    Given the openai-logprobs backend, pointed at a local model or an older hosted one
+    And none of the request settings is set
+    When a question is asked
+    Then the request is byte for byte the one this backend has always sent
+
+  # @test:TestACurrentModelIsAskedTheWayItAccepts
+  Scenario: A current OpenAI model answers through the backend itself, with nothing in between
+    Given a server that refuses max_tokens, refuses more than five alternatives, and reports token probabilities only with reasoning switched off
+    And the three request settings are set for it
+    When a question is asked
+    Then the model answers
+    And the probability still comes from that model's own token probabilities
+
+  # @test:TestEachRequestSettingMovesOnlyItsOwnField
+  Scenario: Each request setting changes its own field and no other
+    Given one server that accepts one of the newer fields and refuses another
+    When only one request setting is set
+    Then only that field of the request changes
+
+  # @test:TestOnlyTheFirstTokenIsReadWhenTheModelWritesMore
+  Scenario: A model given room to write more is still judged on its first token alone
+    Given a model allowed more than one token
+    When it writes prose first and the letter after it
+    Then the result is unanswered
+    And the letter it wrote later is never read
+
+  # @test:TestTheLogprobsACurrentOpenAIModelActuallyReturnedAreAccepted
+  Scenario: A near-certain answer rounded a hair above zero is still an answer
+    Given a server that reports token probabilities in small fixed steps
+    When a near-certain letter comes back a few steps above zero
+    Then the answer stands, and is not thrown away as a broken distribution
+
+  # @test:TestLoadConfigRefusesABadOpenAIRequestSetting
+  Scenario: A request setting no server could use stops the service at start
+    Given a request setting outside its range, or not a plain word
+    When the service starts
+    Then it refuses to start, naming the setting
+
+  # @test:TestTheOpenAIRequestSettingsReachTheWire
+  Scenario: What an operator configured is what reaches the server
+    Given the three request settings set in the environment
+    When the running service asks its backend a question
+    Then the request on the wire carries all three
+
   # @test:TestADistributionRoundedToFourDecimalsIsAnsweredAsReturned
   Scenario: A server that rounds its probabilities is still answered, exactly as it sent them
     Given a typed-decision server that rounds each probability to four decimals

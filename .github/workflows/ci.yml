@@ -50,6 +50,8 @@ jobs:
         run: ./scripts/no-secrets.sh
       - name: the starter catalog loads and ships the minimum
         run: ./scripts/templates-load.sh
+      - name: an older server and a current model each get the request they accept
+        run: ./scripts/request-shape.sh
       - name: the gates have teeth
         run: ./scripts/gates-have-teeth.sh
 

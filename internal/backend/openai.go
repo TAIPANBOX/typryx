@@ -32,10 +32,11 @@ const maxResponseBytes = 1 << 20 // 1 MiB
 // alone, not by the template, since another backend may still take it.
 const maxLetterLabels = 26
 
-// requestTopLogProbs is how many alternatives are requested per token. Fixed,
-// not configurable: raising it only ever helps label_mass, and a caller that
-// wants a different bound tunes TYPRYX_OPENAI_MIN_LABEL_MASS instead.
-const requestTopLogProbs = 20
+// MaxTopLogProbs is how many alternatives are requested per token when
+// nothing says otherwise, and the most an OpenAI-compatible server is asked
+// for: raising it only ever helps label_mass, so the default stays at the top
+// of the range and comes down only for a server that refuses it.
+const MaxTopLogProbs = 20
 
 // OpenAIConfig configures the openai-logprobs backend.
 type OpenAIConfig struct {
@@ -67,6 +68,21 @@ type OpenAIConfig struct {
 	// Validated the same way a caller-supplied run_id is (door.ValidRunID),
 	// by cmd/typryx before this config is ever built.
 	DefaultRunID string
+	// TopLogProbs is how many alternatives are requested per token
+	// (TYPRYX_OPENAI_TOP_LOGPROBS). <= 0 defaults to MaxTopLogProbs. OpenAI's
+	// current models refuse anything above 5.
+	TopLogProbs int
+	// MaxCompletionTokens, when positive, replaces "max_tokens": 1 with
+	// "max_completion_tokens": N (TYPRYX_OPENAI_MAX_COMPLETION_TOKENS). OpenAI's
+	// current models refuse max_tokens by name and cannot finish a message
+	// inside one token; the answer is still one letter, and only the first
+	// token's top_logprobs is ever read. Zero keeps max_tokens: 1.
+	MaxCompletionTokens int
+	// ReasoningEffort, when non-empty, is sent as "reasoning_effort"
+	// (TYPRYX_OPENAI_REASONING_EFFORT). OpenAI's current models report
+	// logprobs only at "none". Empty sends no such field at all, which is what
+	// an older server needs: gpt-4.1-mini refuses the field by name.
+	ReasoningEffort string
 	// PriceInputPerMTok and PriceOutputPerMTok are USD per million tokens,
 	// used only to compute Usage.CostUSD. Zero (the default, and the zero
 	// value of this struct) means unpriced: cost_usd is always 0. Neither is
@@ -111,6 +127,9 @@ func NewOpenAI(cfg OpenAIConfig) *OpenAI {
 	if cfg.MinLabelMass <= 0 {
 		cfg.MinLabelMass = 0.9
 	}
+	if cfg.TopLogProbs <= 0 {
+		cfg.TopLogProbs = MaxTopLogProbs
+	}
 	return &OpenAI{
 		cfg: cfg,
 		client: &http.Client{
@@ -135,11 +154,11 @@ type label struct {
 }
 
 // Ask relabels q's options under single-token letters, asks the configured
-// server for one token at temperature 0 with logprobs, and turns the
-// server's own top_logprobs for those letters into a probability
-// distribution over Key. It never trusts anything the model wrote in
-// prose: the only signal that reaches the caller is the logprob numbers
-// themselves.
+// server for one letter at temperature 0 with logprobs, and turns the
+// server's own top_logprobs for those letters, at the first token of the
+// reply and no later one, into a probability distribution over Key. It never
+// trusts anything the model wrote in prose: the only signal that reaches the
+// caller is the logprob numbers themselves.
 func (o *OpenAI) Ask(ctx context.Context, q Question, eg template.Egress) (Answer, Usage, error) {
 	labels, err := labelsFor(q)
 	if err != nil {
@@ -153,10 +172,15 @@ func (o *OpenAI) Ask(ctx context.Context, q Question, eg template.Egress) (Answe
 			{Role: "system", Content: system},
 			{Role: "user", Content: user},
 		},
-		MaxTokens:   1,
-		Temperature: 0,
-		LogProbs:    true,
-		TopLogProbs: requestTopLogProbs,
+		ReasoningEffort: o.cfg.ReasoningEffort,
+		Temperature:     0,
+		LogProbs:        true,
+		TopLogProbs:     o.cfg.TopLogProbs,
+	}
+	if o.cfg.MaxCompletionTokens > 0 {
+		reqBody.MaxCompletionTokens = o.cfg.MaxCompletionTokens
+	} else {
+		reqBody.MaxTokens = 1
 	}
 	reqJSON, err := json.Marshal(reqBody)
 	if err != nil {
@@ -213,28 +237,33 @@ func (o *OpenAI) Ask(ctx context.Context, q Question, eg template.Egress) (Answe
 		return Answer{}, Usage{}, &UnansweredError{Reason: "no_logprobs"}
 	}
 
-	top, ok := parsed.firstTopLogProbs()
-	if !ok {
-		return Answer{}, Usage{}, &UnansweredError{Reason: "no_logprobs"}
-	}
-
-	probs, labelMass, ok := probabilitiesFor(labels, top)
-	if !ok {
-		return Answer{}, Usage{}, &UnansweredError{Reason: "bad_logprobs"}
-	}
-	if labelMass < o.cfg.MinLabelMass {
-		return Answer{}, Usage{}, &UnansweredError{Reason: "label_mass_too_low"}
-	}
-
-	model := parsed.Model
-	if model == "" {
-		model = o.cfg.Model
-	}
+	// Read before the answer is judged: the server billed these tokens whether
+	// or not the reply turns out to be usable, and the daily cap can only count
+	// what Ask hands back. A body that does not parse reports nothing here,
+	// and no estimate stands in for it, the same rule cost() follows.
 	usage := Usage{}
 	if parsed.Usage != nil {
 		usage.InputTokens = parsed.Usage.PromptTokens
 		usage.OutputTokens = parsed.Usage.CompletionTokens
 		usage.CostUSD = o.cost(usage.InputTokens, usage.OutputTokens)
+	}
+
+	top, ok := parsed.firstTopLogProbs()
+	if !ok {
+		return Answer{}, usage, &UnansweredError{Reason: "no_logprobs"}
+	}
+
+	probs, labelMass, ok := probabilitiesFor(labels, top)
+	if !ok {
+		return Answer{}, usage, &UnansweredError{Reason: "bad_logprobs"}
+	}
+	if labelMass < o.cfg.MinLabelMass {
+		return Answer{}, usage, &UnansweredError{Reason: "label_mass_too_low"}
+	}
+
+	model := parsed.Model
+	if model == "" {
+		model = o.cfg.Model
 	}
 	return Answer{Probabilities: probs, Model: model}, usage, nil
 }
@@ -337,13 +366,19 @@ type chatMessage struct {
 	Content string `json:"content"`
 }
 
+// chatRequest is the request body. The two token limits are exclusive, and
+// omitempty is what keeps a field out of a request that did not ask for it:
+// an older server refuses reasoning_effort by name and a current model refuses
+// max_tokens by name, so "sent as zero" would break one or the other.
 type chatRequest struct {
-	Model       string        `json:"model"`
-	Messages    []chatMessage `json:"messages"`
-	MaxTokens   int           `json:"max_tokens"`
-	Temperature float64       `json:"temperature"`
-	LogProbs    bool          `json:"logprobs"`
-	TopLogProbs int           `json:"top_logprobs"`
+	Model               string        `json:"model"`
+	Messages            []chatMessage `json:"messages"`
+	MaxTokens           int           `json:"max_tokens,omitempty"`
+	MaxCompletionTokens int           `json:"max_completion_tokens,omitempty"`
+	ReasoningEffort     string        `json:"reasoning_effort,omitempty"`
+	Temperature         float64       `json:"temperature"`
+	LogProbs            bool          `json:"logprobs"`
+	TopLogProbs         int           `json:"top_logprobs"`
 }
 
 // flexibleFloat decodes a JSON number OR a JSON string ("NaN", "Infinity",
@@ -440,12 +475,15 @@ func (r chatResponse) firstTopLogProbs() ([]wireTopLogProb, bool) {
 }
 
 // A log-probability is at most 0 and the probabilities of distinct tokens at
-// one position sum to at most 1, but servers round: Ollama reports a near
+// one position sum to at most 1, but servers round. Ollama reports a near
 // certain token as -0.0 while its true value is about -1e-6, so beside the
-// other labels the mass lands a little over 1. These two bounds admit that
-// rounding and nothing that is not a distribution.
+// other labels the mass lands a little over 1. OpenAI's current models report
+// in steps of 2^-18, so a near certain token can come back a few steps above
+// zero (+1.5e-5 on gpt-5.6-luna, 2026-11-06). Both bounds allow a thousandth
+// for that, which moves no decision, and nothing that is not a distribution:
+// logprob +0.002 is still refused.
 const (
-	maxLogprob   = 1e-6
+	maxLogprob   = 1e-3
 	maxLabelMass = 1 + 1e-3
 )
 

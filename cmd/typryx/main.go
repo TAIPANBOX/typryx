@@ -158,6 +158,11 @@ type openaiBackendConfig struct {
 	defaultRunID       string
 	priceInputPerMTok  float64
 	priceOutputPerMTok float64
+	// topLogProbs, maxCompletionTokens and reasoningEffort shape the request
+	// and nothing else; see backend.OpenAIConfig for what each one sends.
+	topLogProbs         int
+	maxCompletionTokens int
+	reasoningEffort     string
 }
 
 // isUnpriced reports whether this backend config's own prices would leave
@@ -169,6 +174,15 @@ func (c *openaiBackendConfig) isUnpriced() bool {
 }
 
 const defaultOpenAIMinLabelMass = 0.9
+
+// maxOpenAICompletionTokens bounds TYPRYX_OPENAI_MAX_COMPLETION_TOKENS. Only
+// the first token is ever read, so a larger budget buys nothing and spends
+// money, and 256 tokens of 20 alternatives each stays inside the 1 MiB the
+// backend reads of a response.
+const maxOpenAICompletionTokens = 256
+
+// maxReasoningEffortBytes bounds TYPRYX_OPENAI_REASONING_EFFORT.
+const maxReasoningEffortBytes = 32
 
 // jevBackendConfig is the validated TYPRYX_JEV_* configuration, set only
 // when TYPRYX_BACKEND=jev.
@@ -345,11 +359,51 @@ func loadOpenAIConfig() (*openaiBackendConfig, error) {
 			"must not be negative")
 	}
 
+	topLogProbs, err := envInt("TYPRYX_OPENAI_TOP_LOGPROBS", backend.MaxTopLogProbs)
+	if err != nil {
+		return nil, err
+	}
+	if topLogProbs < 1 || topLogProbs > backend.MaxTopLogProbs {
+		return nil, badVar("TYPRYX_OPENAI_TOP_LOGPROBS", strconv.FormatInt(topLogProbs, 10),
+			fmt.Sprintf("must be from 1 to %d", backend.MaxTopLogProbs))
+	}
+
+	maxCompletionTokens, err := envInt("TYPRYX_OPENAI_MAX_COMPLETION_TOKENS", 0)
+	if err != nil {
+		return nil, err
+	}
+	if os.Getenv("TYPRYX_OPENAI_MAX_COMPLETION_TOKENS") != "" &&
+		(maxCompletionTokens < 1 || maxCompletionTokens > maxOpenAICompletionTokens) {
+		return nil, badVar("TYPRYX_OPENAI_MAX_COMPLETION_TOKENS", strconv.FormatInt(maxCompletionTokens, 10),
+			fmt.Sprintf("must be from 1 to %d, or unset to send max_tokens: 1", maxOpenAICompletionTokens))
+	}
+
+	reasoningEffort := os.Getenv("TYPRYX_OPENAI_REASONING_EFFORT")
+	if reasoningEffort != "" && !isLowercaseWord(reasoningEffort, maxReasoningEffortBytes) {
+		return nil, badVar("TYPRYX_OPENAI_REASONING_EFFORT", reasoningEffort,
+			fmt.Sprintf("must be one lowercase word of at most %d letters, such as none", maxReasoningEffortBytes))
+	}
+
 	return &openaiBackendConfig{
 		url: rawURL, model: model, key: key, minLabelMass: minLabelMass,
 		meterHeaders: meterHeaders, defaultRunID: defaultRunID,
 		priceInputPerMTok: priceIn, priceOutputPerMTok: priceOut,
+		topLogProbs: int(topLogProbs), maxCompletionTokens: int(maxCompletionTokens),
+		reasoningEffort: reasoningEffort,
 	}, nil
+}
+
+// isLowercaseWord reports whether s is nothing but a to z, at most max bytes.
+func isLowercaseWord(s string, max int) bool {
+	if len(s) > max {
+		return false
+	}
+	for i := 0; i < len(s); i++ {
+		if s[i] < 'a' || s[i] > 'z' {
+			return false
+		}
+	}
+	return true
 }
 
 // loadConfig reads and validates every TYPRYX_ variable. It is checked in the
@@ -602,15 +656,18 @@ func buildService(cfg *config, log *slog.Logger) (*service.Service, *runtime, er
 			log.Info("typryx openai-logprobs metering headers are ON: x-fuse-run-id and x-fuse-agent-id will be sent to TYPRYX_OPENAI_URL")
 		}
 		svc.Backend = backend.NewOpenAI(backend.OpenAIConfig{
-			BaseURL:            cfg.openai.url,
-			Model:              cfg.openai.model,
-			APIKey:             cfg.openai.key,
-			MinLabelMass:       cfg.openai.minLabelMass,
-			MeterHeaders:       cfg.openai.meterHeaders,
-			DefaultRunID:       cfg.openai.defaultRunID,
-			PriceInputPerMTok:  cfg.openai.priceInputPerMTok,
-			PriceOutputPerMTok: cfg.openai.priceOutputPerMTok,
-			Logger:             log,
+			BaseURL:             cfg.openai.url,
+			Model:               cfg.openai.model,
+			APIKey:              cfg.openai.key,
+			MinLabelMass:        cfg.openai.minLabelMass,
+			MeterHeaders:        cfg.openai.meterHeaders,
+			DefaultRunID:        cfg.openai.defaultRunID,
+			PriceInputPerMTok:   cfg.openai.priceInputPerMTok,
+			PriceOutputPerMTok:  cfg.openai.priceOutputPerMTok,
+			TopLogProbs:         cfg.openai.topLogProbs,
+			MaxCompletionTokens: cfg.openai.maxCompletionTokens,
+			ReasoningEffort:     cfg.openai.reasoningEffort,
+			Logger:              log,
 		})
 	case "jev":
 		// The URL was already validated by loadJevConfig; re-parsing it here

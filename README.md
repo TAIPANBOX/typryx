@@ -13,7 +13,7 @@ and recorded.
 ![Go 1.27](https://img.shields.io/badge/Go-1.27-4493f8)
 ![one direct dependency](https://img.shields.io/badge/direct%20dependency-one-2dd4bf)
 ![license Apache 2.0](https://img.shields.io/badge/license-Apache--2.0-9aa7b8)
-![tests](https://img.shields.io/badge/tests-998-brightgreen)
+![tests](https://img.shields.io/badge/tests-1051-brightgreen)
 
 </div>
 
@@ -379,10 +379,12 @@ the server's own `top_logprobs` for that letter, never from anything the model w
 prose: `choice` gets one label per sorted option, `score` gets one label per level
 (array position is the score), `noul` gets exactly two (`A` for true, `B` for false). A
 choice with more than 26 options is refused by this backend alone (`too_many_options`);
-another backend may still take it. The request asks for one token at temperature 0 with
-`logprobs: true` and `top_logprobs: 20`; a response missing `logprobs`, `content`, or
-`top_logprobs` anywhere along that path is `unanswered` with `no_logprobs`; if the labels
-together capture less than `TYPRYX_OPENAI_MIN_LABEL_MASS` (default 0.9) of the response's
+another backend may still take it. By default the request asks for one token at
+temperature 0 with `logprobs: true` and `top_logprobs: 20`, and [OpenAI's current
+models](#openais-current-models) take three settings to accept it. Only the first token
+of a reply is ever read. A response missing `logprobs`, `content`, or `top_logprobs`
+anywhere along that path is `unanswered` with `no_logprobs`; if the labels together
+capture less than `TYPRYX_OPENAI_MIN_LABEL_MASS` (default 0.9) of the response's
 probability mass, the result is `unanswered` with `label_mass_too_low` rather than a
 distribution stretched to sum to one anyway. The state reaches the model only as
 canonical JSON inside a fenced block, after the system message says it is data to judge,
@@ -408,6 +410,55 @@ answer that does not achieve the task), taken verbatim from this run, prompts un
 from what this section already describes. The `eval.answer_quality` and
 `request.complexity` rows above look sound on this small, informal sample, but six asks
 prove nothing about calibration; see NOT PROVEN.
+
+### OpenAI's current models
+
+OpenAI retires `gpt-4.1-mini` and `gpt-4o-mini` on 2027-01-14 and shut `gpt-4.1-nano` down
+on 2026-10-23. The models it names to replace them refuse the default request, so they
+take three more variables:
+
+```sh
+TYPRYX_OPENAI_URL=https://api.openai.com/v1
+TYPRYX_OPENAI_MODEL=gpt-6-luna
+TYPRYX_OPENAI_TOP_LOGPROBS=5
+TYPRYX_OPENAI_MAX_COMPLETION_TOKENS=16
+TYPRYX_OPENAI_REASONING_EFFORT=none
+```
+
+Each one answers a refusal read off the live API on 2026-11-06, one parameter changed at
+a time, the same on `gpt-6-luna`, `gpt-5.6-luna`, `gpt-6-sol` and `gpt-5.6-sol`:
+
+| the default request | what the model says | what to set |
+|---|---|---|
+| `max_tokens: 1` | `'max_tokens' is not supported with this model` | `TYPRYX_OPENAI_MAX_COMPLETION_TOKENS=16`; a budget of 1 fails too, with `Could not finish the message` |
+| `top_logprobs: 20` | `must be less than or equal to 5` | `TYPRYX_OPENAI_TOP_LOGPROBS=5` |
+| no `reasoning_effort` | `'logprobs' is not supported with this model` | `TYPRYX_OPENAI_REASONING_EFFORT=none` |
+
+Leave all three unset for a local server or an older hosted model. The request then stays
+byte for byte what it always was, which `scripts/request-shape.sh` holds, and it has to:
+`gpt-4.1-mini` refuses `reasoning_effort` by name. `temperature: 0` stays in every request,
+because all four models accept it. `gpt-6.1-sol` cannot be reached by this backend: it
+refuses `reasoning_effort: none`, and at any other setting it refuses `logprobs`.
+
+Four things read differently on these models:
+
+- **The reply is still one letter, billed as four tokens.** `usage` reports 4 completion
+  tokens where `logprobs.content` holds one. Only the first token is ever read, so a
+  letter written after prose is not an answer: that reply is `label_mass_too_low`.
+- **They list fewer alternatives than they are asked for, often only the letter they
+  chose.** The other letter then reads exactly 0 and the listed one 1, even where the
+  listed token's own probability is 0.98. A lone letter below
+  `TYPRYX_OPENAI_MIN_LABEL_MASS` is `label_mass_too_low`, since the rest of the mass is not
+  in the list.
+- **They report in steps of 2^-18,** so a near-certain token can come back a few steps
+  above zero: `+0.0000152587890625` was read on `gpt-5.6-luna`. Up to 0.001 counts as that
+  rounding and not as a broken distribution.
+- **The same question does not come back with the same number.** Eight asks of one answer
+  on `gpt-6-luna` read from 0.78 to 1.00, at temperature 0 and with no temperature sent
+  alike, so two runs of a calibration differ by a few items.
+
+The calibration numbers for these models are in [Current OpenAI models, measured
+2026-11-06](#current-openai-models-measured-2026-11-06).
 
 ### Spend through a metering gateway, priced, and capped per day
 
@@ -663,13 +714,46 @@ Three things this shows, each read off the ledgers rather than assumed:
   checking anything that needs working out. Typed-decision models such as Jev are
   built for exactly the second kind; this is the comparison that matters once there
   is access (signups were paused on 2026-09-25).
-- **Current hosted models do not expose token probabilities at all.** gpt-5.x and
-  gpt-6 answer `'logprobs' is not supported with this model` (probed 2026-09-25), so
-  this backend reaches only earlier hosted models and open models. It does not reach
-  Anthropic's API either, which, as far as this repository knows, returns no logprobs.
+- **Current hosted models report token probabilities only with reasoning switched off.**
+  gpt-5.x and gpt-6 answered `'logprobs' is not supported with this model` on 2026-09-25,
+  to a request that sent no `reasoning_effort`; at `reasoning_effort: none` four of them
+  report them (measured below). This backend does not reach Anthropic's API, which, as
+  far as this repository knows, returns no logprobs.
 
 Cost of all six hosted runs together: under one US cent (about 360 calls of about 200
 input tokens and 1 output token each).
+
+### Current OpenAI models, measured 2026-11-06
+
+The same 60 items (seed 1) and the same template (v1, `2d3ecbdc`), through this backend
+with nothing in between: the [three variables](#openais-current-models) for the current
+models, none of them for `gpt-4.1-mini`. Every run answered 60 of 60.
+
+| model | run | accuracy | mean confidence | overconfidence | Brier | ECE |
+|---|---|---|---|---|---|---|
+| gpt-6-luna | 1 | 0.717 | 0.960 | 0.243 | 0.498 | 0.256 |
+| gpt-6-luna | 2 | 0.733 | 0.976 | 0.242 | 0.507 | 0.268 |
+| gpt-6-luna | 3 | 0.717 | 0.978 | 0.262 | 0.526 | 0.274 |
+| gpt-5.6-luna | 1 | 0.650 | 0.967 | 0.317 | 0.682 | 0.329 |
+| gpt-5.6-luna | 2 | 0.617 | 0.980 | 0.363 | 0.758 | 0.380 |
+| gpt-5.6-luna | 3 | 0.600 | 0.984 | 0.384 | 0.779 | 0.393 |
+| gpt-6-sol | 1 | 1.000 | 1.000 | 0.000 | 0.000 | 0.000 |
+| gpt-5.6-sol | 1 | 1.000 | 1.000 | 0.000 | 0.000 | 0.000 |
+| gpt-4.1-mini-2025-04-14 | 1 | 0.750 | 0.984 | 0.234 | 0.506 | 0.263 |
+
+- **The luna models fail the way the models they replace fail.** `gpt-6-luna` passed 16 or
+  17 of the 30 wrong answers and failed none of the right ones, `gpt-5.6-luna` passed 19 or
+  20 and failed 2 to 4, at a mean confidence of 0.96 and above, and `gpt-4.1-mini` passed 13
+  and failed 2 at 0.984.
+- **The sol models got all 60 right in one letter.** So the 2026-09-25 reading above, that
+  one token leaves no room for working something out, holds for the models it was measured
+  on and not for every model. These are arithmetic items up to 19 x 19.
+- **A run is one draw.** Three runs of a model differ by a few items and about 0.02 of mean
+  confidence, so a difference that size between two runs says nothing.
+- **A bound can decide the score.** At the old 1e-6 logprob bound, 13 of 60 answers on
+  `gpt-5.6-luna` were thrown away as `bad_logprobs`, and the 47 left read 0.532. Ten of the
+  13 were items whose answer was right, so the model looked worse than it is by losing the
+  answers it was surest of.
 
 ### How fast is a typed decision, measured (2026-09-25)
 
@@ -881,6 +965,9 @@ triage.anomaly_class 6b4497aec4a78b57c2b0e0b0481faa07e34eb0b7aa8297d45c6f12f4d12
 | `TYPRYX_OPENAI_RUN_ID` | no | none | the run id sent as `x-fuse-run-id` when `TYPRYX_OPENAI_METER_HEADERS` is on and a caller's ask carried none of its own; at most 128 bytes, no control characters |
 | `TYPRYX_OPENAI_PRICE_PER_MTOK_INPUT` | no | `0` | USD per million input tokens for the openai-logprobs backend; `0` means unpriced, `cost_usd` is always `0` |
 | `TYPRYX_OPENAI_PRICE_PER_MTOK_OUTPUT` | no | `0` | USD per million output tokens for the openai-logprobs backend; `0` means unpriced |
+| `TYPRYX_OPENAI_TOP_LOGPROBS` | no | `20` | alternatives requested per token, from 1 to 20; OpenAI's current models refuse more than 5 (see [OpenAI's current models](#openais-current-models)) |
+| `TYPRYX_OPENAI_MAX_COMPLETION_TOKENS` | no | unset = `max_tokens: 1` | from 1 to 256; set, the request carries `max_completion_tokens` in place of `max_tokens`; the first token is still the only one read |
+| `TYPRYX_OPENAI_REASONING_EFFORT` | no | unset = no such field | one lowercase word, at most 32 letters, sent as `reasoning_effort`; OpenAI's current models report token probabilities only at `none`, and an older model refuses the field by name |
 | `TYPRYX_JEV_KEY_FILE` | when `TYPRYX_BACKEND=jev` | none | path to a file holding the Jev bearer key, trimmed; never read from the environment value itself, never logged, never echoed into an error |
 | `TYPRYX_JEV_URL` | no | `https://api.typesafe.ai/v1` | must be absolute http/https with a host and no userinfo, query, or fragment |
 | `TYPRYX_JEV_MODEL` | no | `jev-latest` | the model name sent with every request |
@@ -943,6 +1030,7 @@ go build ./...
 ./scripts/one-way-out.sh
 ./scripts/no-secrets.sh
 ./scripts/templates-load.sh
+./scripts/request-shape.sh
 ./scripts/gates-have-teeth.sh
 gosec -quiet ./...
 govulncheck ./...
@@ -950,7 +1038,7 @@ govulncheck ./...
 
 `gosec` and `govulncheck` also run in CI's `security` job; CLAUDE.md asks for them before every push.
 
-445 tests. That is the number of `func Test` functions in the suite. The badge's 998
+457 tests. That is the number of `func Test` functions in the suite. The badge's 1051
 counts every `=== RUN` line, subtests included, and `scripts/readme-numbers.sh` measures
 both and fails if either stated number drifts. `go test ./... -race` covers every package;
 `internal/manifest` builds and starts the real binary to prove `components.json` against
@@ -996,8 +1084,8 @@ file I/O (a failed `OpenFile`, `Sync` or `Truncate` on a file the test just made
 `internal/api` unchanged at 98.9%. Nineteen planted faults (CLAUDE.md invariants 35 to 38)
 were each caught by a named test.
 
-`scripts/gates-have-teeth.sh` runs 20 cases: 14 plant a fault and require the gate to
-fail, 6 plant a non-fault and require the gate to pass. Eleven defects
+`scripts/gates-have-teeth.sh` runs 29 cases: 22 plant a fault and require the gate to
+fail, 7 plant a non-fault and require the gate to pass. Eleven defects
 were found in a whole-file review on 2026-09-25 and fixed red-first (see CLAUDE.md for
 the mutants each fix's test catches); a twelfth, the `required: null` schema defect
 above, was found afterward by a real MCP client rather than by any test in this
