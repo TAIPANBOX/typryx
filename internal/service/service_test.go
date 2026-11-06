@@ -4,6 +4,9 @@ import (
 	"context"
 	"encoding/json"
 	"math"
+	"net/http"
+	"net/http/httptest"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -1163,6 +1166,43 @@ func TestTheDailyUsdCapRefusesTheCallAfterTheLimitIsReached(t *testing.T) {
 	}
 	if len(tb.Asked) != 1 {
 		t.Errorf("the refused call must never reach the backend; backend was asked %d times", len(tb.Asked))
+	}
+}
+
+// The real backend against a real HTTP reply, because what this guards lives
+// on the seam: the service adds whatever usage Ask hands back, so a backend
+// that drops it on an unanswered reply leaves the cap blind while every test
+// of the cap itself stays green.
+func TestAnUnansweredReplyAPaidServerBilledCountsAgainstTheDailyCap(t *testing.T) {
+	var calls atomic.Int64
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		calls.Add(1)
+		_, _ = w.Write([]byte(`{"choices":[{"logprobs":{"content":[{"top_logprobs":[{"token":"The","logprob":-0.1}]}]}}],` +
+			`"usage":{"prompt_tokens":1000000,"completion_tokens":0}}`))
+	}))
+	defer srv.Close()
+	d := newService(t, noulTemplate("task"), backend.NewOpenAI(backend.OpenAIConfig{
+		BaseURL: srv.URL + "/v1", Model: "m", PriceInputPerMTok: 1,
+	}))
+	d.Service.UsdCap = service.NewUsdCap(1.0)
+	req := service.AskRequest{Template: "eval.outcome_met", State: json.RawMessage(`{"task":"t"}`)}
+	caller := service.Caller{AgentID: "agent://acme.example/bot"}
+
+	result, refusal := d.Service.Ask(context.Background(), caller, req)
+	if refusal != nil {
+		t.Fatalf("the first call must reach the server: %+v", refusal)
+	}
+	if !result.Unanswered || result.Reason != "label_mass_too_low" {
+		t.Fatalf("expected label_mass_too_low, got %+v", result)
+	}
+
+	// That reply cost exactly the cap, so nothing more may reach the server.
+	_, refusal = d.Service.Ask(context.Background(), caller, req)
+	if refusal == nil || refusal.Code != "over_daily_spend_cap" {
+		t.Fatalf("expected over_daily_spend_cap, got %+v", refusal)
+	}
+	if got := calls.Load(); got != 1 {
+		t.Errorf("the server was called %d times, want 1", got)
 	}
 }
 

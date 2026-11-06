@@ -177,6 +177,12 @@ Feature: Typed answers, as an option a customer adds to the stack
     Then the result is unanswered
     And the letter it wrote later is never read
 
+  # @test:TestTheLogprobsACurrentOpenAIModelActuallyReturnedAreAccepted
+  Scenario: A near-certain answer rounded a hair above zero is still an answer
+    Given a server that reports token probabilities in small fixed steps
+    When a near-certain letter comes back a few steps above zero
+    Then the answer stands, and is not thrown away as a broken distribution
+
   # @test:TestLoadConfigRefusesABadOpenAIRequestSetting
   Scenario: A request setting no server could use stops the service at start
     Given a request setting outside its range, or not a plain word

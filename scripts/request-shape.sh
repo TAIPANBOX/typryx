@@ -6,7 +6,7 @@
 # request variables sends what a current OpenAI model accepts, because that
 # model refuses max_tokens by name. Raising the token budget also takes away
 # what max_tokens: 1 used to guarantee for free, so the first-token rule is held
-# here as well.
+# here as well, and so is the rounding those models put on a near-certain token.
 #
 # Run by name, not by package: `go test` over a package stays green if one of
 # these tests is deleted, so each is required to have actually run.
@@ -18,6 +18,7 @@ tests=(
   TestACurrentModelIsAskedTheWayItAccepts
   TestEachRequestSettingMovesOnlyItsOwnField
   TestOnlyTheFirstTokenIsReadWhenTheModelWritesMore
+  TestTheLogprobsACurrentOpenAIModelActuallyReturnedAreAccepted
   TestTheOpenAIRequestSettingsReachTheWire
 )
 pattern="^($(IFS='|'; echo "${tests[*]}"))\$"

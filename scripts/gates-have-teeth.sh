@@ -261,6 +261,10 @@ fault "request-shape: a later token read instead of the first" \
   internal/backend/openai.go 'return content[0].TopLogProbs, true' 'return content[len(content)-1].TopLogProbs, true' \
   fail ./scripts/request-shape.sh
 
+fault "request-shape: a near-certain token refused as a broken distribution" \
+  internal/backend/openai.go 'maxLogprob   = 1e-3' 'maxLogprob   = 1e-6' \
+  fail ./scripts/request-shape.sh
+
 fault "request-shape: a setting dropped on its way to the backend" \
   cmd/typryx/main.go 'ReasoningEffort:     cfg.openai.reasoningEffort,' '' \
   fail ./scripts/request-shape.sh

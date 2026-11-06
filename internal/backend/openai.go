@@ -237,28 +237,33 @@ func (o *OpenAI) Ask(ctx context.Context, q Question, eg template.Egress) (Answe
 		return Answer{}, Usage{}, &UnansweredError{Reason: "no_logprobs"}
 	}
 
-	top, ok := parsed.firstTopLogProbs()
-	if !ok {
-		return Answer{}, Usage{}, &UnansweredError{Reason: "no_logprobs"}
-	}
-
-	probs, labelMass, ok := probabilitiesFor(labels, top)
-	if !ok {
-		return Answer{}, Usage{}, &UnansweredError{Reason: "bad_logprobs"}
-	}
-	if labelMass < o.cfg.MinLabelMass {
-		return Answer{}, Usage{}, &UnansweredError{Reason: "label_mass_too_low"}
-	}
-
-	model := parsed.Model
-	if model == "" {
-		model = o.cfg.Model
-	}
+	// Read before the answer is judged: the server billed these tokens whether
+	// or not the reply turns out to be usable, and the daily cap can only count
+	// what Ask hands back. A body that does not parse reports nothing here,
+	// and no estimate stands in for it, the same rule cost() follows.
 	usage := Usage{}
 	if parsed.Usage != nil {
 		usage.InputTokens = parsed.Usage.PromptTokens
 		usage.OutputTokens = parsed.Usage.CompletionTokens
 		usage.CostUSD = o.cost(usage.InputTokens, usage.OutputTokens)
+	}
+
+	top, ok := parsed.firstTopLogProbs()
+	if !ok {
+		return Answer{}, usage, &UnansweredError{Reason: "no_logprobs"}
+	}
+
+	probs, labelMass, ok := probabilitiesFor(labels, top)
+	if !ok {
+		return Answer{}, usage, &UnansweredError{Reason: "bad_logprobs"}
+	}
+	if labelMass < o.cfg.MinLabelMass {
+		return Answer{}, usage, &UnansweredError{Reason: "label_mass_too_low"}
+	}
+
+	model := parsed.Model
+	if model == "" {
+		model = o.cfg.Model
 	}
 	return Answer{Probabilities: probs, Model: model}, usage, nil
 }
@@ -470,12 +475,15 @@ func (r chatResponse) firstTopLogProbs() ([]wireTopLogProb, bool) {
 }
 
 // A log-probability is at most 0 and the probabilities of distinct tokens at
-// one position sum to at most 1, but servers round: Ollama reports a near
+// one position sum to at most 1, but servers round. Ollama reports a near
 // certain token as -0.0 while its true value is about -1e-6, so beside the
-// other labels the mass lands a little over 1. These two bounds admit that
-// rounding and nothing that is not a distribution.
+// other labels the mass lands a little over 1. OpenAI's current models report
+// in steps of 2^-18, so a near certain token can come back a few steps above
+// zero (+1.5e-5 on gpt-5.6-luna, 2026-11-06). Both bounds allow a thousandth
+// for that, which moves no decision, and nothing that is not a distribution:
+// logprob +0.002 is still refused.
 const (
-	maxLogprob   = 1e-6
+	maxLogprob   = 1e-3
 	maxLabelMass = 1 + 1e-3
 )
 

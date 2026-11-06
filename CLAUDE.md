@@ -83,12 +83,16 @@ in the plan.
    `bad_probabilities`, `over_hourly_cap`, and, from the openai-logprobs
    backend's own `backend.UnansweredError` (phase C), `no_logprobs`,
    `label_mass_too_low`, `too_many_options`, `bad_logprobs`. The last is a
-   server that did not send a distribution (a logprob above 1e-6, or label
+   server that did not send a distribution (a logprob above 1e-3, or label
    mass above 1.001): normalising it would turn nonsense into a confident
-   answer, so it is refused. The bounds admit Ollama's rounding of a certain
-   token to -0.0 and nothing wider. *(test:
+   answer, so it is refused. The bounds admit rounding and nothing wider:
+   Ollama's -0.0 for a certain token, and the steps of 2^-18 OpenAI's current
+   models report in, which land a near-certain token up to +1.5e-5 (measured
+   on `gpt-5.6-luna`, 2026-11-06; at the old 1e-6 bound 13 of 60 answers on
+   that model were thrown away). *(test:
    `TestALogprobAboveZeroOrAMassAboveOneIsUnanswered`,
-   `TestTheLogprobsOllamaActuallyReturnedAreAccepted`; found in the session
+   `TestTheLogprobsOllamaActuallyReturnedAreAccepted`,
+   `TestTheLogprobsACurrentOpenAIModelActuallyReturnedAreAccepted`; found in the session
    model's review of phase C, 2026-09-25, after the hostile sweep passed:
    the sweep checks the output, which normalisation always makes look valid;
    four mutants on the two bounds each caught)*
@@ -410,7 +414,10 @@ in the plan.
     `TestTheDailyUsdCapIsNeverConsumedByARefusedCall`,
     `TestNoDailyUsdCapNeverRefuses`,
     `TestUsdCapWindowRollsOverAtTheNextUTCDayWithAnInjectedClock`,
-    `TestUsdCapAtZeroOrLessNeverRefusesOrAdds`, all in `internal/service`;
+    `TestUsdCapAtZeroOrLessNeverRefusesOrAdds`,
+    `TestAnUnansweredReplyAPaidServerBilledCountsAgainstTheDailyCap`, all in
+    `internal/service`; `TestAnUnansweredCallStillReportsWhatTheServerBilled`
+    in `internal/backend`;
     `TestLoadConfigRefusesAPositiveMaxUsdPerDayOnTheStubBackend`,
     `TestLoadConfigRefusesAPositiveMaxUsdPerDayOnAnUnpricedOpenAIBackend`,
     `TestLoadConfigRefusesAPositiveMaxUsdPerDayOnAnUnpricedJevBackend`,
@@ -725,10 +732,11 @@ in the plan.
     `TestNothingConfiguredSendsTheRequestAnOlderServerAlreadyAccepts`,
     `TestACurrentModelIsAskedTheWayItAccepts`,
     `TestEachRequestSettingMovesOnlyItsOwnField`,
-    `TestOnlyTheFirstTokenIsReadWhenTheModelWritesMore` in `internal/backend`;
-    `TestTheOpenAIRequestSettingsReachTheWire`,
+    `TestOnlyTheFirstTokenIsReadWhenTheModelWritesMore`,
+    `TestTheLogprobsACurrentOpenAIModelActuallyReturnedAreAccepted` in
+    `internal/backend`; `TestTheOpenAIRequestSettingsReachTheWire`,
     `TestLoadConfigRefusesABadOpenAIRequestSetting` in `cmd/typryx`; mutants:
-    the seven planted in the teeth cases, each caught)*
+    the eight planted in the teeth cases, each caught)*
 
 @decided 2026-09-30: a customer chooses one of three data modes for typed
 answers (a hosted Jev, their own model on their own hardware, or off). typryx

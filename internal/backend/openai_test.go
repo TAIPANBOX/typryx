@@ -642,6 +642,11 @@ func TestALogprobAboveZeroOrAMassAboveOneIsUnanswered(t *testing.T) {
 			{Token: " A", LogProb: math.Log(0.7)},
 			{Token: "B", LogProb: math.Log(0.2)},
 		},
+		"a positive logprob past any rounding, on a token that is not a label": {
+			{Token: "A", LogProb: math.Log(0.95)},
+			{Token: "B", LogProb: math.Log(0.04)},
+			{Token: "Billing", LogProb: 0.002},
+		},
 	}
 	for name, entries := range cases {
 		t.Run(name, func(t *testing.T) {
@@ -693,6 +698,63 @@ func TestTheLogprobsOllamaActuallyReturnedAreAccepted(t *testing.T) {
 	}
 	if ans.Probabilities["billing"] < 0.999 {
 		t.Fatalf("billing should carry almost all the mass, got %v", ans.Probabilities)
+	}
+}
+
+// The logprobs gpt-5.6-luna returned for a near-certain letter on 2026-11-06,
+// each read off the raw response. OpenAI's current models report in steps of
+// 2^-18, so a token that is all but certain can land a few steps above zero.
+// With a bound of 1e-6 these were bad_logprobs: 13 of 60 answers on that model
+// were thrown away, the near-certain ones, which is exactly the wrong end.
+func TestTheLogprobsACurrentOpenAIModelActuallyReturnedAreAccepted(t *testing.T) {
+	for _, logprob := range []float64{
+		0.000003814697265625, 0.00000762939453125, 0.000011444091796875, 0.0000152587890625,
+	} {
+		t.Run(strconv.FormatFloat(logprob, 'g', -1, 64), func(t *testing.T) {
+			srv := newJSONServer(t, 200, nil, fakeResponseBody(t, "gpt-5.6-luna", []tlp{{Token: "A", LogProb: logprob}}, nil))
+			o := newBackend(t, srv.URL, "", testLogger(nil))
+			ans, _, err := o.Ask(context.Background(), noulQuestion("it worked", "it did not"), template.Egress{})
+			if err != nil {
+				t.Fatalf("a measured answer must be accepted, got %v", err)
+			}
+			if got := ans.Probabilities["true"]; got != 1 {
+				t.Errorf("the one listed letter should carry all the mass, got %v", got)
+			}
+		})
+	}
+}
+
+// A server bills a call whether or not its reply turns out to be usable, and
+// the daily cap (invariant 31) can only count what Ask hands back: a reply
+// thrown away with an empty Usage was money the cap never saw.
+func TestAnUnansweredCallStillReportsWhatTheServerBilled(t *testing.T) {
+	billed := &struct{ Prompt, Completion int }{Prompt: 1000, Completion: 16}
+	cases := map[string][]byte{
+		"label_mass_too_low": fakeResponseBody(t, "m", []tlp{
+			{Token: "The", LogProb: math.Log(0.9)}, {Token: "A", LogProb: math.Log(0.05)},
+		}, billed),
+		"bad_logprobs": fakeResponseBody(t, "m", []tlp{{Token: "A", LogProb: 5.0}}, billed),
+		"no_logprobs":  []byte(`{"choices":[{}],"usage":{"prompt_tokens":1000,"completion_tokens":16}}`),
+	}
+	for reason, body := range cases {
+		t.Run(reason, func(t *testing.T) {
+			srv := newJSONServer(t, 200, nil, body)
+			o := NewOpenAI(OpenAIConfig{
+				BaseURL: srv.URL + "/v1", Model: "m", Logger: testLogger(nil),
+				PriceInputPerMTok: 1, PriceOutputPerMTok: 10,
+			})
+			_, usage, err := o.Ask(context.Background(), noulQuestion("a", "b"), template.Egress{})
+			var un *UnansweredError
+			if !aserr(err, &un) || un.Reason != reason {
+				t.Fatalf("expected %s, got %v", reason, err)
+			}
+			if usage.InputTokens != 1000 || usage.OutputTokens != 16 {
+				t.Errorf("tokens = %d in, %d out, want 1000 and 16", usage.InputTokens, usage.OutputTokens)
+			}
+			if want := 1000/1e6*1 + 16/1e6*10; math.Abs(usage.CostUSD-want) > 1e-12 {
+				t.Errorf("cost = %v, want %v", usage.CostUSD, want)
+			}
+		})
 	}
 }
 
