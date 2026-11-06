@@ -238,6 +238,41 @@ if [ "$got" != "pass" ]; then
 fi
 printf "ok  %-56s (%s)\n" "templates-load: a new valid template" "pass"
 
+# --- request-shape.sh --------------------------------------------------------
+
+fault "request-shape: reasoning_effort sent even when unset" \
+  internal/backend/openai.go '`json:"reasoning_effort,omitempty"`' '`json:"reasoning_effort"`' \
+  fail ./scripts/request-shape.sh
+
+fault "request-shape: the default stops sending max_tokens: 1" \
+  internal/backend/openai.go 'reqBody.MaxTokens = 1' 'reqBody.MaxCompletionTokens = 1' \
+  fail ./scripts/request-shape.sh
+
+fault "request-shape: the default asks for five alternatives" \
+  internal/backend/openai.go 'const MaxTopLogProbs = 20' 'const MaxTopLogProbs = 5' \
+  fail ./scripts/request-shape.sh
+
+fault "request-shape: max_tokens sent beside max_completion_tokens" \
+  internal/backend/openai.go 'reqBody.MaxCompletionTokens = o.cfg.MaxCompletionTokens' 'reqBody.MaxCompletionTokens = o.cfg.MaxCompletionTokens
+		reqBody.MaxTokens = 1' \
+  fail ./scripts/request-shape.sh
+
+fault "request-shape: a later token read instead of the first" \
+  internal/backend/openai.go 'return content[0].TopLogProbs, true' 'return content[len(content)-1].TopLogProbs, true' \
+  fail ./scripts/request-shape.sh
+
+fault "request-shape: a setting dropped on its way to the backend" \
+  cmd/typryx/main.go 'ReasoningEffort:     cfg.openai.reasoningEffort,' '' \
+  fail ./scripts/request-shape.sh
+
+fault "request-shape: a comment reworded must not fire" \
+  internal/backend/openai.go '// chatRequest is the request body.' '// chatRequest is the body of the request.' \
+  pass ./scripts/request-shape.sh
+
+fault "request-shape: a test renamed away measures nothing" \
+  internal/backend/openai_test.go 'func TestACurrentModelIsAskedTheWayItAccepts(' 'func TestNoLongerTheNameTheGateReads(' \
+  fail ./scripts/request-shape.sh
+
 # --- every gate in scripts/ has a case here ---------------------------------
 
 uncovered=""

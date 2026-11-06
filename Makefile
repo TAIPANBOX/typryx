@@ -8,4 +8,5 @@ gates:
 	./scripts/one-way-out.sh
 	./scripts/no-secrets.sh
 	./scripts/templates-load.sh
+	./scripts/request-shape.sh
 	./scripts/gates-have-teeth.sh

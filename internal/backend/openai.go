@@ -127,6 +127,9 @@ func NewOpenAI(cfg OpenAIConfig) *OpenAI {
 	if cfg.MinLabelMass <= 0 {
 		cfg.MinLabelMass = 0.9
 	}
+	if cfg.TopLogProbs <= 0 {
+		cfg.TopLogProbs = MaxTopLogProbs
+	}
 	return &OpenAI{
 		cfg: cfg,
 		client: &http.Client{
@@ -151,11 +154,11 @@ type label struct {
 }
 
 // Ask relabels q's options under single-token letters, asks the configured
-// server for one token at temperature 0 with logprobs, and turns the
-// server's own top_logprobs for those letters into a probability
-// distribution over Key. It never trusts anything the model wrote in
-// prose: the only signal that reaches the caller is the logprob numbers
-// themselves.
+// server for one letter at temperature 0 with logprobs, and turns the
+// server's own top_logprobs for those letters, at the first token of the
+// reply and no later one, into a probability distribution over Key. It never
+// trusts anything the model wrote in prose: the only signal that reaches the
+// caller is the logprob numbers themselves.
 func (o *OpenAI) Ask(ctx context.Context, q Question, eg template.Egress) (Answer, Usage, error) {
 	labels, err := labelsFor(q)
 	if err != nil {
@@ -169,10 +172,15 @@ func (o *OpenAI) Ask(ctx context.Context, q Question, eg template.Egress) (Answe
 			{Role: "system", Content: system},
 			{Role: "user", Content: user},
 		},
-		MaxTokens:   1,
-		Temperature: 0,
-		LogProbs:    true,
-		TopLogProbs: MaxTopLogProbs,
+		ReasoningEffort: o.cfg.ReasoningEffort,
+		Temperature:     0,
+		LogProbs:        true,
+		TopLogProbs:     o.cfg.TopLogProbs,
+	}
+	if o.cfg.MaxCompletionTokens > 0 {
+		reqBody.MaxCompletionTokens = o.cfg.MaxCompletionTokens
+	} else {
+		reqBody.MaxTokens = 1
 	}
 	reqJSON, err := json.Marshal(reqBody)
 	if err != nil {
@@ -353,13 +361,19 @@ type chatMessage struct {
 	Content string `json:"content"`
 }
 
+// chatRequest is the request body. The two token limits are exclusive, and
+// omitempty is what keeps a field out of a request that did not ask for it:
+// an older server refuses reasoning_effort by name and a current model refuses
+// max_tokens by name, so "sent as zero" would break one or the other.
 type chatRequest struct {
-	Model       string        `json:"model"`
-	Messages    []chatMessage `json:"messages"`
-	MaxTokens   int           `json:"max_tokens"`
-	Temperature float64       `json:"temperature"`
-	LogProbs    bool          `json:"logprobs"`
-	TopLogProbs int           `json:"top_logprobs"`
+	Model               string        `json:"model"`
+	Messages            []chatMessage `json:"messages"`
+	MaxTokens           int           `json:"max_tokens,omitempty"`
+	MaxCompletionTokens int           `json:"max_completion_tokens,omitempty"`
+	ReasoningEffort     string        `json:"reasoning_effort,omitempty"`
+	Temperature         float64       `json:"temperature"`
+	LogProbs            bool          `json:"logprobs"`
+	TopLogProbs         int           `json:"top_logprobs"`
 }
 
 // flexibleFloat decodes a JSON number OR a JSON string ("NaN", "Infinity",

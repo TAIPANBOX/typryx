@@ -50,6 +50,7 @@ go build ./...
 ./scripts/one-way-out.sh
 ./scripts/no-secrets.sh
 ./scripts/templates-load.sh
+./scripts/request-shape.sh
 ./scripts/gates-have-teeth.sh   # needs a clean tree, run it after committing
 gosec -quiet ./...              # v2.29.0, as CI; silent when clean
 govulncheck ./...               # v1.7.0, as CI
@@ -705,6 +706,29 @@ in the plan.
     host only (red), the https default port wrong (red), the header stripped
     before forwarding (caught by `TestAuthorizationIsForwardedAndNeverLoggedOrRecorded`),
     the header written to the log (caught by the same test))*
+
+44. **A deployment that set no request variable sends the request it always
+    sent, and only the first token of a reply is ever read.** With
+    `TYPRYX_OPENAI_TOP_LOGPROBS`, `TYPRYX_OPENAI_MAX_COMPLETION_TOKENS` and
+    `TYPRYX_OPENAI_REASONING_EFFORT` all unset, the request is byte for byte
+    the old one (`max_tokens: 1`, `top_logprobs: 20`, no other field), because
+    an older server refuses `reasoning_effort` by name (`gpt-4.1-mini` did on
+    2026-11-06). Set, they send what a current OpenAI model accepts, and
+    `max_tokens` is then never sent, because that model refuses it by name.
+    Each setting moves its own field and no other. A budget above one token
+    takes away what `max_tokens: 1` guaranteed for free, so
+    `firstTopLogProbs` holds it alone: a letter the model writes after prose
+    is never read, and such a reply is `label_mass_too_low`. `temperature: 0`
+    stays in every request: all four current models accept it, and it moved
+    nothing measurable. *(gate: `scripts/request-shape.sh`, teeth in
+    `scripts/gates-have-teeth.sh`; test:
+    `TestNothingConfiguredSendsTheRequestAnOlderServerAlreadyAccepts`,
+    `TestACurrentModelIsAskedTheWayItAccepts`,
+    `TestEachRequestSettingMovesOnlyItsOwnField`,
+    `TestOnlyTheFirstTokenIsReadWhenTheModelWritesMore` in `internal/backend`;
+    `TestTheOpenAIRequestSettingsReachTheWire`,
+    `TestLoadConfigRefusesABadOpenAIRequestSetting` in `cmd/typryx`; mutants:
+    the seven planted in the teeth cases, each caught)*
 
 @decided 2026-09-30: a customer chooses one of three data modes for typed
 answers (a hosted Jev, their own model on their own hardware, or off). typryx

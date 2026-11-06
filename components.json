@@ -57,6 +57,9 @@
           "TYPRYX_OPENAI_RUN_ID": { "required": false },
           "TYPRYX_OPENAI_PRICE_PER_MTOK_INPUT": { "required": false },
           "TYPRYX_OPENAI_PRICE_PER_MTOK_OUTPUT": { "required": false },
+          "TYPRYX_OPENAI_TOP_LOGPROBS": { "required": false },
+          "TYPRYX_OPENAI_MAX_COMPLETION_TOKENS": { "required": false },
+          "TYPRYX_OPENAI_REASONING_EFFORT": { "required": false },
           "TYPRYX_MAX_USD_PER_DAY": { "required": false },
           "TYPRYX_JEV_KEY_FILE": {
             "required": false,
