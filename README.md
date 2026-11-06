@@ -379,10 +379,12 @@ the server's own `top_logprobs` for that letter, never from anything the model w
 prose: `choice` gets one label per sorted option, `score` gets one label per level
 (array position is the score), `noul` gets exactly two (`A` for true, `B` for false). A
 choice with more than 26 options is refused by this backend alone (`too_many_options`);
-another backend may still take it. The request asks for one token at temperature 0 with
-`logprobs: true` and `top_logprobs: 20`; a response missing `logprobs`, `content`, or
-`top_logprobs` anywhere along that path is `unanswered` with `no_logprobs`; if the labels
-together capture less than `TYPRYX_OPENAI_MIN_LABEL_MASS` (default 0.9) of the response's
+another backend may still take it. By default the request asks for one token at
+temperature 0 with `logprobs: true` and `top_logprobs: 20`, and [OpenAI's current
+models](#openais-current-models) take three settings to accept it. Only the first token
+of a reply is ever read. A response missing `logprobs`, `content`, or `top_logprobs`
+anywhere along that path is `unanswered` with `no_logprobs`; if the labels together
+capture less than `TYPRYX_OPENAI_MIN_LABEL_MASS` (default 0.9) of the response's
 probability mass, the result is `unanswered` with `label_mass_too_low` rather than a
 distribution stretched to sum to one anyway. The state reaches the model only as
 canonical JSON inside a fenced block, after the system message says it is data to judge,
@@ -881,6 +883,9 @@ triage.anomaly_class 6b4497aec4a78b57c2b0e0b0481faa07e34eb0b7aa8297d45c6f12f4d12
 | `TYPRYX_OPENAI_RUN_ID` | no | none | the run id sent as `x-fuse-run-id` when `TYPRYX_OPENAI_METER_HEADERS` is on and a caller's ask carried none of its own; at most 128 bytes, no control characters |
 | `TYPRYX_OPENAI_PRICE_PER_MTOK_INPUT` | no | `0` | USD per million input tokens for the openai-logprobs backend; `0` means unpriced, `cost_usd` is always `0` |
 | `TYPRYX_OPENAI_PRICE_PER_MTOK_OUTPUT` | no | `0` | USD per million output tokens for the openai-logprobs backend; `0` means unpriced |
+| `TYPRYX_OPENAI_TOP_LOGPROBS` | no | `20` | alternatives requested per token, from 1 to 20; OpenAI's current models refuse more than 5 (see [OpenAI's current models](#openais-current-models)) |
+| `TYPRYX_OPENAI_MAX_COMPLETION_TOKENS` | no | unset = `max_tokens: 1` | from 1 to 256; set, the request carries `max_completion_tokens` in place of `max_tokens`; the first token is still the only one read |
+| `TYPRYX_OPENAI_REASONING_EFFORT` | no | unset = no such field | one lowercase word, at most 32 letters, sent as `reasoning_effort`; OpenAI's current models report token probabilities only at `none`, and an older model refuses the field by name |
 | `TYPRYX_JEV_KEY_FILE` | when `TYPRYX_BACKEND=jev` | none | path to a file holding the Jev bearer key, trimmed; never read from the environment value itself, never logged, never echoed into an error |
 | `TYPRYX_JEV_URL` | no | `https://api.typesafe.ai/v1` | must be absolute http/https with a host and no userinfo, query, or fragment |
 | `TYPRYX_JEV_MODEL` | no | `jev-latest` | the model name sent with every request |
@@ -943,6 +948,7 @@ go build ./...
 ./scripts/one-way-out.sh
 ./scripts/no-secrets.sh
 ./scripts/templates-load.sh
+./scripts/request-shape.sh
 ./scripts/gates-have-teeth.sh
 gosec -quiet ./...
 govulncheck ./...
@@ -996,8 +1002,8 @@ file I/O (a failed `OpenFile`, `Sync` or `Truncate` on a file the test just made
 `internal/api` unchanged at 98.9%. Nineteen planted faults (CLAUDE.md invariants 35 to 38)
 were each caught by a named test.
 
-`scripts/gates-have-teeth.sh` runs 20 cases: 14 plant a fault and require the gate to
-fail, 6 plant a non-fault and require the gate to pass. Eleven defects
+`scripts/gates-have-teeth.sh` runs 28 cases: 21 plant a fault and require the gate to
+fail, 7 plant a non-fault and require the gate to pass. Eleven defects
 were found in a whole-file review on 2026-09-25 and fixed red-first (see CLAUDE.md for
 the mutants each fix's test catches); a twelfth, the `required: null` schema defect
 above, was found afterward by a real MCP client rather than by any test in this
