@@ -314,11 +314,21 @@ in the plan.
     cap change, or a `deny`. Held structurally, not by a runtime check:
     `internal/calibration.Run` takes no path to write to and has no side
     effect beyond reading (invariant 23's test is the same evidence, from the
-    other direction); `internal/service` has no dependency on
-    `internal/calibration` at all (`go list -f '{{join .Deps "\n"}}'
-    ./internal/service | grep -c calibration` prints 0); and `--emit`'s own
-    write is one explicit, separate step a caller chooses, gated on a real
-    `--agent-id` (invariant 3's identity rule, applied here too).
+    other direction); no package in this module but `cmd/typryx` depends on
+    `internal/calibration`, directly or through another package, so the
+    service, the API, the MCP surface, the backends and the wardryx proxy
+    cannot even name a verdict; and `--emit`'s own write is one explicit,
+    separate step a caller chooses, gated on a real `--agent-id` (invariant
+    3's identity rule, applied here too). *(test:
+    `TestOnlyTheCommandCanSeeACalibrationVerdict` in `internal/calibration`,
+    reading the import graph from `go list`, red first against a blank import
+    of `internal/calibration` planted in `internal/service`: it named
+    `internal/service` and the three packages that import it (`internal/api`,
+    `internal/mcp`, `internal/wardryxproxy`); `TestCalibrationNeverModifiesTheLedgerItReads`
+    in `internal/calibration` for `Run` writing nothing;
+    `TestEmitWithoutAgentIDSkipsAndSaysSo`, `TestEmitRefusesAMalformedAgentID`
+    and `TestEmitWithAgentIDWritesTheCalibrationDriftEvent` in `cmd/typryx`
+    for the `--emit` gate)*
 
 26. **A rate-limited or overloaded Jev call is retried, briefly, and never
     past the caller's deadline.** Only 429 and 529 are retried, up to 3

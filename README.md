@@ -13,7 +13,7 @@ and recorded.
 ![Go 1.27](https://img.shields.io/badge/Go-1.27-4493f8)
 ![one direct dependency](https://img.shields.io/badge/direct%20dependency-one-2dd4bf)
 ![license Apache 2.0](https://img.shields.io/badge/license-Apache--2.0-9aa7b8)
-![tests](https://img.shields.io/badge/tests-1051-brightgreen)
+![tests](https://img.shields.io/badge/tests-1052-brightgreen)
 
 </div>
 
@@ -337,6 +337,56 @@ know which policies read the signal. Keep the hourly cap (`TYPRYX_MAX_CALLS_PER_
 1000) and set `TYPRYX_MAX_USD_PER_DAY` when the backend is priced; a spent cap simply stops
 signals being added.
 
+### Agents that manage network devices
+
+`action.risk_class` has five classes, and none of them says whether a change weakens
+access control or interrupts a network. In a router lab on 2026-10-05 (typryx v0.4.0
+behind tokenfuse's MCP broker and wardryx, an agent managing an OpenWrt router; issue
+[#22](https://github.com/TAIPANBOX/typryx/issues/22)), `jev-1.13.0` classed a `uci_apply`
+that sets a firewall zone's `input` to `ACCEPT` as `reversible_change` at 0.94 to 0.95,
+and an `exec` of `/etc/init.d/network restart` as `reversible_change` at 0.98. Read
+against the template's own criteria, that answer is defensible: neither call deletes or
+overwrites data, `uci_apply` arms its own rollback timer, and `reversible_change` is a
+change that can be undone. So a policy that holds only `destructive`, `external_send`
+and `financial` lets both calls through, and the signal did what the question asked.
+
+typryx does not override the model's answer and does not add a class for this. The
+template is the question typryx-evalset measured, word for word (CLAUDE.md invariant
+39), and a sixth class is a new question that has to be measured before a signal built
+on it means anything. typryx-evalset's 69 `action.risk_class` test rows hold no
+firewall, access-control or network-restart call, so its 100% on that family says
+nothing about this kind of tool call either way. For an agent that manages routers,
+firewalls or switches, write the wardryx policy for that agent:
+
+```yaml
+name: network-device-agents
+target: "agent://acme.example/netops/*"
+hold_if_signal:
+  name: action.risk_class
+  values: [reversible_change, destructive, external_send, financial]
+  min_probability: 0.5
+  when_absent: hold
+deny_tool: [exec]
+```
+
+- **Hold on `reversible_change` too.** For an agent like this nearly every write is a
+  reversible change, so this holds a router write for a person and lets a read
+  (`read_only`) through. A lower `min_probability` holds more; the value is the
+  operator's trade between calls held and calls missed.
+- **`deny_tool` reads a tool's name, never its arguments.** It refuses a whole tool,
+  such as a shell `exec`, not one command run through it. Deny the tool when the agent
+  has no business running a shell; when it does, the hold above is what catches a
+  service restart run through it.
+- **`when_absent: hold`** holds a tool call that reached wardryx with no signal (a
+  timeout, a spent cap, truncated arguments). Leave wardryx's single-use approvals on
+  wherever it is set.
+
+An operator who wants a class of their own (for example `security_change`) can point
+`TYPRYX_PROXY_TEMPLATE` at a template of their own: a choice template whose fields are
+only `tool`, `arguments` and `target`. That template is a new question, outside
+typryx-evalset's measurement; `typryx calibration` scores it on your own truths once
+they are posted to `/v1/outcome`.
+
 ## How an answer is made
 
 ![Measured probabilities for request.complexity from the stub backend, the highest bar served as the answer; a backend's own claim is ignored; no usable probabilities means unanswered with a reason](docs/answer.svg)
@@ -581,7 +631,9 @@ By family, accuracy with its 95% interval: `action.risk_class` 100.0 (94.7 to 10
 where an answer is recognised and the two where work has to be checked separate
 clearly; on the checking pair Jev was also less well calibrated (on `eval.outcome_met`
 about 0.82 confident on average against 0.70 right). The same run's local and no-model
-rows are in typryx-evalset's README.
+rows (`qwen2.5:7b` 70.0%, ECE 0.273; a fixed default 25.1%, ECE 0.749), with the
+commands that produced them, are in [VALIDATION.md](VALIDATION.md) and typryx-evalset's
+README.
 
 ## Calibration
 
@@ -697,6 +749,10 @@ id, so calibration keeps the two versions apart):
 | gpt-4.1-nano-2025-04-14 | v2 | 0.500 | 1.000 | 0.500 | 0.999 | 0.500 |
 | qwen2.5:7b (local) | v2 | 0.667 | 0.965 | 0.298 | 0.597 | 0.298 |
 | qwen2.5:3b (local) | v2 | 0.500 | 0.998 | 0.498 | 0.995 | 0.498 |
+
+These are 60 arithmetic items under one template. The 434-question benchmark is a
+different question with its own `qwen2.5:7b` figures; [VALIDATION.md](VALIDATION.md) sets
+the two side by side.
 
 Three things this shows, each read off the ledgers rather than assumed:
 
@@ -870,7 +926,7 @@ unless an operator explicitly sets `TYPRYX_ALLOW_FREEFORM=1`.
 
 ## The record
 
-![An answer_id flows to the journal and the ledger; a later truth is scored against the template version an answer was asked under, a second truth is refused with 409, a torn last line is truncated before the next write, and calibration is planned](docs/record.svg)
+![An answer_id flows to the journal and the ledger; a later truth is scored against the template version an answer was asked under, a second truth is refused with 409, a torn last line is truncated before the next write, and calibration reads both files read-only, per template, version, backend and model, never pooled](docs/record.svg)
 
 When `TYPRYX_EVENTS` is set, every answer and refusal writes one agent-event line
 (schema `taipanbox.dev/agent-event/v1.0`, source `typryx`): `typed_answer`,
@@ -1038,7 +1094,7 @@ govulncheck ./...
 
 `gosec` and `govulncheck` also run in CI's `security` job; CLAUDE.md asks for them before every push.
 
-457 tests. That is the number of `func Test` functions in the suite. The badge's 1051
+458 tests. That is the number of `func Test` functions in the suite. The badge's 1052
 counts every `=== RUN` line, subtests included, and `scripts/readme-numbers.sh` measures
 both and fails if either stated number drifts. `go test ./... -race` covers every package;
 `internal/manifest` builds and starts the real binary to prove `components.json` against
@@ -1218,7 +1274,7 @@ repository, and is now covered.
       model](#your-own-model-trained-on-your-own-questions).
 - [x] **Benchmark**: Jev, a local `qwen2.5:7b` and a fixed default measured on the
       frozen 434-question test split of typryx-evalset on 2026-09-30; see
-      [Jev backend](#jev-backend).
+      [Jev backend](#jev-backend) and [VALIDATION.md](VALIDATION.md).
 - [ ] **Phase I**: verdryx's judge bake-off with a live Jev, prepared in its
       `examples/bakeoff`; a key and a spend decision exist since 2026-09-30, the
       bake-off itself has not been run.
