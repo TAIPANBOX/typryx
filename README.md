@@ -464,8 +464,9 @@ prove nothing about calibration; see NOT PROVEN.
 ### OpenAI's current models
 
 OpenAI retires `gpt-4.1-mini` and `gpt-4o-mini` on 2027-01-14 and shut `gpt-4.1-nano` down
-on 2026-10-23. The models it names to replace them refuse the default request, so they
-take three more variables:
+on 2026-10-23. Its deprecations page, read 2026-11-25, names `gpt-6-luna` as the
+replacement for the first two and `gpt-5.6-luna` for `gpt-4.1-nano`. The models it names
+refuse the default request, so they take three more variables:
 
 ```sh
 TYPRYX_OPENAI_URL=https://api.openai.com/v1
@@ -732,7 +733,16 @@ go run ./examples/calibration -url http://127.0.0.1:4320 -key k1 -n 60 -seed 1
 /tmp/typryx calibration --ledger /tmp/cal-3b --min-n 30
 ```
 
-### Hosted models, and what one token can and cannot judge (measured 2026-09-25)
+### Hosted models, and what one token can and cannot judge (measured 2026-09-25, historical)
+
+Historical: two of these three hosted models are on their way out, and this table is
+kept as it was measured, not re-run. `gpt-4.1-nano` was shut down on 2026-10-23;
+`gpt-4o-mini` and `gpt-4.1-mini` retire on 2027-01-14 (OpenAI's deprecations page, read
+2026-11-25). OpenAI names `gpt-6-luna` (USD 0.10 input, 0.50 output per million tokens on
+2026-11-25) as the replacement for `gpt-4o-mini` and `gpt-4.1-mini`, and `gpt-5.6-luna`
+(USD 0.20 and 1.20) for `gpt-4.1-nano`. Both replacements were measured on the same 60
+items on 2026-11-06, in [Current OpenAI models](#current-openai-models-measured-2026-11-06)
+below.
 
 The same 60 items (seed 1), through the same `openai-logprobs` backend pointed at
 `https://api.openai.com/v1`, with the example template (v1, `2d3ecbdc`) and with a v2
@@ -773,8 +783,10 @@ Three things this shows, each read off the ledgers rather than assumed:
 - **Current hosted models report token probabilities only with reasoning switched off.**
   gpt-5.x and gpt-6 answered `'logprobs' is not supported with this model` on 2026-09-25,
   to a request that sent no `reasoning_effort`; at `reasoning_effort: none` four of them
-  report them (measured below). This backend does not reach Anthropic's API, which, as
-  far as this repository knows, returns no logprobs.
+  report them (measured below). This backend does not reach Anthropic's API: measured
+  on 2026-11-25 against its OpenAI-compatible endpoint, Claude Haiku 5.5 refuses
+  `temperature` by name and, asked without it, returns `logprobs: null`. See
+  [Claude Haiku 5.5](#claude-haiku-55-measured-2026-11-25) below.
 
 Cost of all six hosted runs together: under one US cent (about 360 calls of about 200
 input tokens and 1 output token each).
@@ -811,7 +823,11 @@ models, none of them for `gpt-4.1-mini`. Every run answered 60 of 60.
   13 were items whose answer was right, so the model looked worse than it is by losing the
   answers it was surest of.
 
-### How fast is a typed decision, measured (2026-09-25)
+### How fast is a typed decision, measured (2026-09-25, historical)
+
+Historical, kept as measured: `gpt-4.1-mini` retires on 2027-01-14 (OpenAI names
+`gpt-6-luna` as its replacement); `gpt-5.4-mini` is still current. The current Haiku is
+measured in the next section.
 
 The same 60 items, one decision three ways, timed end to end from the caller
 (`examples/speed`; one run each, so read the medians as indicative):
@@ -838,6 +854,40 @@ go run ./examples/speed -mode typryx -url http://127.0.0.1:4320 -model "gpt-4.1-
 go run ./examples/speed -mode text -url https://api.openai.com/v1 -model gpt-4.1-mini -keyfile KEYFILE
 go run ./examples/speed -mode reasoning -url https://api.openai.com/v1 -model gpt-5.4-mini -keyfile KEYFILE
 ```
+
+### Claude Haiku 5.5, measured 2026-11-25
+
+The same 60 items (seed 1) and the same judge prompt as the speed table above, sent to
+`claude-haiku-5-5` through Anthropic's OpenAI-compatible endpoint
+(`https://api.anthropic.com/v1/chat/completions`), timed end to end from forge, a
+4-core machine on a home connection in the UK, one run each:
+
+| way of deciding | model | median | p95 | accuracy |
+|---|---|---|---|---|
+| text judge, short verdict (`max_tokens: 400`, no `temperature`) | claude-haiku-5-5 (hosted) | 629 ms | 1129 ms | 1.000 |
+| reasoning judge (`max_completion_tokens: 4000`) | claude-haiku-5-5 (hosted) | 635 ms | 981 ms | 1.000 |
+| typed, one token, through typryx | claude-haiku-5-5 (hosted) | no answer | no answer | 0 of 60 answered |
+
+- **Haiku 5.5 got all 60 right either way, in about 0.63 s.** Each verdict was short
+  (about 70 completion tokens), and the text judge's request differs from the
+  2026-09-25 one only by leaving `temperature` out, which this model refuses.
+- **It cannot be a typed judge through this backend, and typryx says so instead of
+  guessing.** typryx sends `temperature: 0` in every request (invariant 44), and the
+  endpoint refused all 60 asks with `400 invalid_request_error`
+  (`temperature` is deprecated for this model); every one came back `unanswered`.
+  Asked without `temperature`, the same endpoint answers the letter and returns
+  `logprobs: null`, so there is no probability to read even then. Calibration needs a
+  probability, so Haiku 5.5 has no calibration row.
+- **Cost:** 8,880 input and 8,398 output tokens at USD 0.10 and 0.50 per million, about
+  USD 0.005 for both judge runs; the 60 refused asks cost nothing.
+
+```sh
+go run ./examples/speed -mode text -url https://api.anthropic.com/v1 -model claude-haiku-5-5 -keyfile KEYFILE -temperature omit
+go run ./examples/speed -mode reasoning -url https://api.anthropic.com/v1 -model claude-haiku-5-5 -keyfile KEYFILE
+```
+
+`-temperature`, `-tokens-field` and `-reasoning-effort` change only the field they name;
+left at their defaults, `examples/speed` sends the request measured on 2026-09-25.
 
 ![A reliability diagram: the diagonal is perfect calibration, and qwen2.5:3b and qwen2.5:7b's measured bins both sit well below it, meaning both models are confident far more often than they are right](docs/calibration.svg)
 

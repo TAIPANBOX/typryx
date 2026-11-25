@@ -8,6 +8,12 @@
 //	go run ./examples/speed -mode typryx -url http://127.0.0.1:4320 -model LABEL
 //	go run ./examples/speed -mode text -url https://api.openai.com/v1 -model M -keyfile F
 //	go run ./examples/speed -mode reasoning -url https://api.openai.com/v1 -model M -keyfile F
+//
+// Current models refuse parts of the default text request: OpenAI's luna and
+// sol models refuse max_tokens, Claude Haiku 5.5 refuses temperature. The
+// -temperature, -tokens-field and -reasoning-effort flags change only the
+// field they name; left at their defaults, the request is the one measured on
+// 2026-09-25.
 package main
 
 import (
@@ -76,6 +82,9 @@ func main() {
 	url := flag.String("url", "", "endpoint base")
 	model := flag.String("model", "", "model")
 	keyFile := flag.String("keyfile", "", "bearer key file")
+	temperature := flag.String("temperature", "0", "text mode: temperature to send, or \"omit\" to send none")
+	tokensField := flag.String("tokens-field", "", "max_tokens or max_completion_tokens (default: max_tokens for text, max_completion_tokens for reasoning)")
+	effort := flag.String("reasoning-effort", "", "reasoning_effort to send (default: none sent)")
 	flag.Parse()
 	key := ""
 	if *keyFile != "" {
@@ -104,11 +113,24 @@ func main() {
 			}
 		case "text", "reasoning":
 			body := map[string]any{"model": *model, "messages": []map[string]string{{"role": "user", "content": fmt.Sprintf(judgePrompt, task, it.finalAnswer)}}}
+			field, budget := "max_completion_tokens", 4000
 			if *mode == "text" {
-				body["temperature"] = 0
-				body["max_tokens"] = 400
-			} else {
-				body["max_completion_tokens"] = 4000
+				field, budget = "max_tokens", 400
+				if *temperature != "omit" {
+					var t float64
+					if _, err := fmt.Sscan(*temperature, &t); err != nil {
+						fmt.Fprintln(os.Stderr, "bad -temperature")
+						os.Exit(2)
+					}
+					body["temperature"] = t
+				}
+			}
+			if *tokensField != "" {
+				field = *tokensField
+			}
+			body[field] = budget
+			if *effort != "" {
+				body["reasoning_effort"] = *effort
 			}
 			out, t, err := post(*url+"/chat/completions", key, body)
 			ms = t
