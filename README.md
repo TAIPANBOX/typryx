@@ -1151,6 +1151,11 @@ both and fails if either stated number drifts. `go test ./... -race` covers ever
 what it actually does; CI's `image` job builds the Dockerfile on every push and pull
 request, pushing nowhere.
 
+Coverage in CI, the current figure: **93.8% of statements** on main, measured 2026-11-27 by
+`go test -race -coverprofile` in the `gate` job (typryx#49). `.coverage-floor` holds 92.8, a
+ratchet that only rises, with 90 as the stated target. The three paragraphs below are the
+older manual measurements of 2026-09-25 and 2026-09-30, kept as history.
+
 Coverage (`go test ./... -coverprofile=cover.out -race`, measured 2026-09-25, after phase
 D landed): **87.9%** overall, up from 87.1% before this phase. `internal/backend` rose to
 93.5% (from 92.7%): `jev.go` itself is 93.7% statement coverage (`retryDelay`, `cost`,
