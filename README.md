@@ -13,7 +13,7 @@ and recorded.
 ![Go 1.27](https://img.shields.io/badge/Go-1.27-4493f8)
 ![one direct dependency](https://img.shields.io/badge/direct%20dependency-one-2dd4bf)
 ![license Apache 2.0](https://img.shields.io/badge/license-Apache--2.0-9aa7b8)
-![tests](https://img.shields.io/badge/tests-1052-brightgreen)
+![tests](https://img.shields.io/badge/tests-1106-brightgreen)
 
 </div>
 
@@ -1144,7 +1144,7 @@ govulncheck ./...
 
 `gosec` and `govulncheck` also run in CI's `security` job; CLAUDE.md asks for them before every push.
 
-458 tests. That is the number of `func Test` functions in the suite. The badge's 1052
+503 tests. That is the number of `func Test` functions in the suite. The badge's 1106
 counts every `=== RUN` line, subtests included, and `scripts/readme-numbers.sh` measures
 both and fails if either stated number drifts. `go test ./... -race` covers every package;
 `internal/manifest` builds and starts the real binary to prove `components.json` against
