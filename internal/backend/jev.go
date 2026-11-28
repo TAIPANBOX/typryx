@@ -11,7 +11,7 @@
 // documented at docs.typesafe.ai/api and /introduction/quickstart (pinned
 // verbatim in testdata/jev_example_response.json, read 2026-09-25), and run
 // against the real api.typesafe.ai once on 2026-09-30 (eight asks, one
-// wrong-key refusal). See README.md's "Jev backend" section and NOT PROVEN.
+// wrong-key refusal). See README.md's "Jev backend" and "Limits" sections.
 package backend
 
 import (
