@@ -2,11 +2,11 @@
 
 Process and invariants only. **No status**: status goes stale and a stale
 instruction file is worse than none. For where the code actually is, read the
-tests and README.md's NOT PROVEN section.
+tests and README.md's Limits section.
 
 ## Read before you change anything
 
-1. `README.md`, and specifically NOT PROVEN.
+1. `README.md`, and specifically Limits.
 2. `features/typed-answers.feature`. Every scenario there is bound to a named
    test, both directions, by `scripts/features-are-bound.sh`.
 3. `components.json`. The `checked` bucket is proved by `internal/manifest`
@@ -817,7 +817,7 @@ customer without typryx runs the identical wardryx.
   same day measured on typryx-evalset's 434-question test split, one ask at a
   time. The live retry path, large states, concurrency and any sustained
   volume are unexercised.
-  See README's "Jev backend" section and NOT PROVEN. Jev output must never
+  See README's "Jev backend" and "Limits" sections. Jev output must never
   become training labels for another model: TypeSafe's agreement forbids
   distillation and building a competing product from its output. `openai-logprobs` (phase C) and calibration (phase E) are also
   built; see README's "Local model backend" and "Calibration" sections.

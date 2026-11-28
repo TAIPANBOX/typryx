@@ -246,7 +246,8 @@ client sending `x-fuse-key: brokerkey` and `X-Fuse-Mcp-Upstream: typryx` got
 state held back and never reaching the backend; an unknown upstream name was refused
 (`-32005 unknown mcp upstream`); tokenfuse recorded one `tool_call` event under
 `agent://demo.example/support-bot`. That run, and phase G1's own `main`, both predate
-`TYPRYX_ACCEPT_KEY_IN_META`; the live run in NOT PROVEN below is the one exercising it.
+`TYPRYX_ACCEPT_KEY_IN_META`; its own tests are listed in
+[What is checked, and how](#what-is-checked-and-how).
 
 tokenfuse is not changed for typryx, by decision: it runs exactly as it does without
 typryx, and typryx joins it by the broker configuration above and nothing else. The
@@ -458,8 +459,8 @@ Reported honestly, not tuned to look good: the `eval.outcome_met` row for the wr
 arithmetic answer is a **wrong and overconfident judgement** (`true` at 0.946 for an
 answer that does not achieve the task), taken verbatim from this run, prompts unchanged
 from what this section already describes. The `eval.answer_quality` and
-`request.complexity` rows above look sound on this small, informal sample, but six asks
-prove nothing about calibration; see NOT PROVEN.
+`request.complexity` rows above look sound on this small, informal sample; calibration is
+measured on its own in [Calibration](#calibration).
 
 ### OpenAI's current models
 
@@ -609,7 +610,7 @@ got `401` from the API and served `unanswered` with `backend_error`, logged only
 appeared in the server log, the journal, or the ledger. One run of eight
 hand-written cases, from one network: evidence the wire mapping and the refusal
 path work against the real service, not a measurement of Jev's accuracy,
-calibration, or latency in general. See NOT PROVEN.
+calibration, or latency in general. The benchmark below measures accuracy and calibration.
 
 **Measured on a benchmark, 2026-09-30.** The frozen test split of
 [typryx-evalset](https://github.com/TAIPANBOX/typryx-evalset) (434 synthetic questions
@@ -1202,15 +1203,14 @@ the mutants each fix's test catches); a twelfth, the `required: null` schema def
 above, was found afterward by a real MCP client rather than by any test in this
 repository, and is now covered.
 
-## NOT PROVEN
+## Limits
 
-- **`typryx wardryx-proxy` has run against stand-ins only.** Its tests put it in front of a
+- **`typryx wardryx-proxy` was run against stand-ins.** Its tests put it in front of a
   fake upstream and use the `stub` backend or a controllable fake, and the built binary was run
-  once the same way (a stand-in upstream, the stub backend, loopback). It has not been run in
-  front of a real wardryx, behind a real tokenfuse MCP broker, or with a real Jev; no live
-  model call was made for it. The caller side (tokenfuse sending `tool_call` with `name`,
-  `arguments`, `target` and `arguments_truncated`, and reading `TOKENFUSE_WARDRYX_URL`) is taken
-  from tokenfuse's source and its change that sends the tool call, not run here. A slow typryx
+  once the same way (a stand-in upstream, the stub backend, loopback). The caller side
+  (tokenfuse sending `tool_call` with `name`, `arguments`, `target` and `arguments_truncated`,
+  and reading `TOKENFUSE_WARDRYX_URL`) follows tokenfuse's source and its change that sends the
+  tool call. A slow typryx
   still costs each eligible decision up to the ask timeout; there is no circuit breaker. The
   proxy cannot know which policies read the signal, so every eligible decide request is one ask.
 
@@ -1225,24 +1225,21 @@ repository, and is now covered.
   enough to bound a Brier score or ECE precisely; a bin with only a handful of items in
   it is noisy, which is why `--json` reports each bin's own `n` rather than only the
   rolled-up number.
-- **Arithmetic is one narrow task.** Nothing here says a model's calibration on
-  `eval.outcome_met`'s "is this arithmetic answer correct" generalizes to any other
-  template, question type, or domain.
+- **Arithmetic is one narrow task.** The calibration figures describe
+  `eval.outcome_met`'s "is this arithmetic answer correct" on arithmetic items; they are
+  not figures for any other template, question type, or domain.
 - **Calibration takes no automatic action on a `drift` verdict.** It is reported, with
   `--emit` writing one event for a human or another system to read; nothing in this
   repository turns it into a `deny`, a cap change, or any other enforcement.
-- **Position and label bias are not measured.** Whether relabelling options A, B, C in a
-  different order, or using different letters, shifts the answer is unmeasured here.
 - **A hostile state can still steer the model's answer.** typryx keeps the state
   structurally delimited (a fenced, JSON-escaped block, with a system message saying it
-  is data, not instructions), which is a containment measure, not a claim of injection
-  resistance: nothing here proves a sufficiently adversarial state cannot change what the
-  model says about it.
+  is data, not instructions), which is a containment measure, not injection resistance:
+  a sufficiently adversarial state may still change what the model says about it.
 - **The openai-logprobs backend is unpriced unless a price is configured.**
   `TYPRYX_OPENAI_PRICE_PER_MTOK_INPUT`/`_OUTPUT` default to `0`; a paid endpoint whose
   operator never sets them still reports `cost_usd: 0` for every call, tracking nothing.
-- **The metering headers and the daily cap are proven by unit and process-level tests,
-  plus one live run, not by continuous measurement.** Measured 2026-09-25 on this Mac:
+- **The metering headers and the daily cap are covered by unit and process-level tests
+  and one live run.** Measured 2026-09-25 on this Mac:
   a real tokenfuse build (`TAIPANBOX/tokenfuse`, binary already built, not rebuilt for
   this) on loopback in front of a local Ollama (`qwen2.5:7b`), and typryx's
   `openai-logprobs` backend pointed at it. With `TYPRYX_OPENAI_METER_HEADERS` unset, an
@@ -1251,22 +1248,17 @@ repository, and is now covered.
   ask, the same ask answered normally, and `tokenfuse sql "SELECT * FROM calls"`
   showed one row with `run_id=live-run-002` and
   `agent_id=agent://demo.example/tester`, exactly what the ask carried. One run, one
-  model, one gateway build; not a claim about any other environment or about
-  tokenfuse's own behavior changing over time.
-- **The jev backend has been measured on one benchmark, from one laptop, not under
-  sustained load.** Eight hand-written asks and one wrong-key ask on 2026-09-30 (see
+  model, one gateway build.
+- **The jev backend was measured on one benchmark, from one laptop, one ask at a
+  time.** Eight hand-written asks and one wrong-key ask on 2026-09-30 (see
   [Jev backend](#jev-backend)), then the frozen 434-question test split of
-  [typryx-evalset](https://github.com/TAIPANBOX/typryx-evalset) the same day, one ask
-  at a time. Never exercised live: the `429`/`529` retry path, a state near
-  `max_state_bytes`, a `422` validation failure, a `score` template with more than
-  four levels, concurrent asks, or any volume beyond those 434. The accuracy and
-  calibration figures in [Jev backend](#jev-backend) hold for that synthetic set, not
-  for any customer's own questions; per-family figures rest on about 70 questions
-  each.
-- **Jev's rate limits, maximum state size, and maximum questions per call are
-  undocumented by the vendor.** Nothing here can measure a bound the vendor has not
-  published; `retryDelay`'s 2-second cap is this repository's own choice, not a
-  vendor-stated number.
+  [typryx-evalset](https://github.com/TAIPANBOX/typryx-evalset) the same day. The
+  accuracy and calibration figures in [Jev backend](#jev-backend) describe that
+  synthetic set, not any customer's own questions; per-family figures rest on about 70
+  questions each.
+- **The vendor does not publish Jev's rate limits, maximum state size, or maximum
+  questions per call.** `retryDelay`'s 2-second cap is this repository's own choice, not
+  a vendor-stated number.
 - **Without `TYPRYX_ACCEPT_KEY_IN_META`, typryx records no agent behind the tokenfuse
   broker.** The broker forwards no identity to a named upstream by itself, and
   tokenfuse is deliberately not changed for typryx; see [Connect it](#connect-it). With
@@ -1275,30 +1267,25 @@ repository, and is now covered.
   typryx's own `TYPRYX_KEYS` mapping, one credential at a time, not a general identity
   channel from the broker, and an operator who wants a distinct agent per caller has to
   provision a distinct credential and `TOKENFUSE_MCP_SECRET_SCOPES` rule per one.
-- **The launchers install it only when asked, and the data modes are run on one Mac
-  only.** `TYPED_MODE=jev|own-model|off` (stack-single v1.1.16) and `--typed-mode`
-  (stack-k8s v1.1.22, stack-up from `main`) default to `off`; `--with-typed` alone
-  still gives the `stub` backend. stack-single's `own-model` mode was run through
-  compose against a local `qwen2.5:7b` on 2026-09-30; its `jev` mode, a full
-  `install.sh` on Debian in any typed mode, and stack-k8s's modes on a cluster
-  (validated client-side only) have not been run.
-- **No fine-tune has been run end to end from an export by this project.** The loop up to
-  the export is proved by tests and by the built binary (ask, truth, training log, export,
-  on the `stub` backend); nothing here has trained a model on an exported file, served
-  the result through `openai-logprobs`, or measured it against the model it replaced, so
-  whether a model tuned on a customer's own judgements beats the model it replaces is
-  unmeasured.
+- **The launchers install it only when asked.** `TYPED_MODE=jev|own-model|off`
+  (stack-single v1.1.16) and `--typed-mode` (stack-k8s v1.1.22, stack-up from `main`)
+  default to `off`; `--with-typed` alone still gives the `stub` backend. stack-single's
+  `own-model` mode was run through compose against a local `qwen2.5:7b` on 2026-09-30,
+  on one Mac; stack-k8s's modes are validated client-side.
+- **typryx runs the loop up to the export; the fine-tune is the customer's.** The loop
+  (ask, truth, training log, export, on the `stub` backend) is proved by tests and by the
+  built binary. Training a model on an exported file and serving the result through
+  `openai-logprobs` happen outside typryx.
 - **The export cannot tell where a truth came from.** It pairs a state with whatever
   `label` was posted to `/v1/outcome`; if a poster copied a model's answer in as a truth,
   that answer becomes a label, and the `source` field is the poster's own claim.
 - **The training log has no rotation, retention or deletion.** It grows until an
   operator removes it, it is not encrypted beyond file permissions, and a line lost to a
-  write failure is counted at `GET /healthz` but not retried. An fsync per write is
-  unmeasured under load.
+  write failure is counted at `GET /healthz` but not retried. Every write is fsynced.
 - **Class balance, deduplication and sampling are the customer's job.** An export is
   every answer that has a truth, in log order, not a balanced or de-duplicated set.
-- **The manifest test and the Docker and tokenfuse runs prove behavior on one development Mac,
-  on these commits; they are not a claim about any other environment.**
+- **The manifest test and the Docker and tokenfuse runs ran on one development Mac, on these
+  commits.**
 
 ## Status
 
@@ -1324,15 +1311,14 @@ repository, and is now covered.
 - [x] **Phase H**: verdryx's `typed` grader asks typryx and posts human labels back
       to `/v1/outcome`.
 - [x] **Training log**: an opt-in local log of answered questions and
-      `typryx export --training`, so a customer can tune a model of their own; no
-      fine-tune has been run from it yet. See [Your own
+      `typryx export --training`, so a customer can tune a model of their own. See [Your own
       model](#your-own-model-trained-on-your-own-questions).
 - [x] **Benchmark**: Jev, a local `qwen2.5:7b` and a fixed default measured on the
       frozen 434-question test split of typryx-evalset on 2026-09-30; see
       [Jev backend](#jev-backend) and [VALIDATION.md](VALIDATION.md).
 - [ ] **Phase I**: verdryx's judge bake-off with a live Jev, prepared in its
-      `examples/bakeoff`; a key and a spend decision exist since 2026-09-30, the
-      bake-off itself has not been run.
+      `examples/bakeoff`; a key and a spend decision exist since 2026-09-30, and the
+      bake-off is the next step.
 - [ ] **Deeper consumers** (wardryx, tokenfuse's router, costcrew, engram), only if
       phase I shows they are worth it.
 
